@@ -11,6 +11,10 @@ import {
 import { type Observable, ObservableValue } from "@signal-app/observable"
 import type { Player } from "@signal-app/player"
 
+type HeldNote = Pick<NoteEvent, "id" | "noteNumber"> & {
+  playedTick: number
+}
+
 export class MIDIRecorder {
   trackId: TrackId = UNASSIGNED_TRACK_ID
   private stopRecording: (() => void) | null = null
@@ -20,21 +24,34 @@ export class MIDIRecorder {
 
   constructor(
     private readonly songStore: Pick<SongStore, "song">,
-    private readonly player: Pick<Player, "position" | "onPositionChanged">,
-    private readonly midiDeviceStore: Pick<MIDIDeviceStore, "midiInputRouting">,
+    private readonly player: Pick<
+      Player,
+      "getTickAtTime" | "onPositionChanged"
+    >,
+    private readonly midiDeviceStore: Pick<
+      MIDIDeviceStore,
+      "midiInputRouting" | "recordingOffsetMs"
+    >,
     private readonly midiInput: Pick<MIDIInput, "on">,
+    private readonly toRenderTime: (outputTime: number) => number,
   ) {}
 
   get isRecording() {
     return this._isRecording.value
   }
 
-  start() {
-    const { player } = this
-
+  start(quantizeTick?: (tick: number) => number) {
     this.stop()
 
-    const recordedNotes: { [key: TrackId]: NoteEvent[] } = {}
+    const { recordingOffsetMs } = this.midiDeviceStore
+    const getTick = (outputTime: number) =>
+      Math.floor(
+        this.player.getTickAtTime(
+          this.toRenderTime(outputTime) - recordingOffsetMs,
+        ),
+      )
+
+    const recordedNotes: { [key: TrackId]: HeldNote[] } = {}
 
     const unsubscribeMidiInput = this.midiInput.on("midiMessage", (e) => {
       if (!this.isRecording) {
@@ -47,7 +64,7 @@ export class MIDIRecorder {
         return
       }
 
-      const tick = Math.floor(this.player.position)
+      const tick = getTick(e.timeStamp)
 
       const routing = this.midiDeviceStore.midiInputRouting
 
@@ -64,12 +81,13 @@ export class MIDIRecorder {
 
       switch (message.subtype) {
         case "noteOn": {
+          const startTick = quantizeTick?.(tick) ?? tick
           tracks.forEach((track) => {
             const note = track.addEvent<NoteEvent>({
               type: "channel",
               subtype: "note",
               noteNumber: message.noteNumber,
-              tick,
+              tick: startTick,
               velocity: message.velocity,
               duration: 0,
               isRecording: true,
@@ -77,7 +95,11 @@ export class MIDIRecorder {
             if (recordedNotes[track.id] === undefined) {
               recordedNotes[track.id] = []
             }
-            recordedNotes[track.id].push(note)
+            recordedNotes[track.id].push({
+              id: note.id,
+              noteNumber: note.noteNumber,
+              playedTick: tick,
+            })
           })
           break
         }
@@ -89,7 +111,7 @@ export class MIDIRecorder {
               .filter((n) => n.noteNumber === message.noteNumber)
               .forEach((n) => {
                 track.updateEvent<NoteEvent>(n.id, {
-                  duration: Math.max(0, tick - n.tick),
+                  duration: Math.max(0, tick - n.playedTick),
                 })
               })
 
@@ -109,8 +131,8 @@ export class MIDIRecorder {
     })
 
     // extend duration while key press
-    const unsubscribePlayer = player.onPositionChanged.subscribe(() => {
-      const tick = Math.floor(player.position)
+    const unsubscribePlayer = this.player.onPositionChanged.subscribe(() => {
+      const tick = getTick(performance.now())
 
       Object.entries(recordedNotes).forEach(([trackId, notes]) => {
         const track = this.songStore.song.getTrack(
@@ -121,7 +143,7 @@ export class MIDIRecorder {
         }
         notes.forEach((n) => {
           track.updateEvent<NoteEvent>(n.id, {
-            duration: Math.max(0, tick - n.tick),
+            duration: Math.max(0, tick - n.playedTick),
           })
         })
       })

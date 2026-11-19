@@ -94,6 +94,12 @@ export default {
     language: "Language",
     theme: "Theme",
     "midi-settings": "MIDI Settings",
+    "midi-recording-offset": "Recording offset (ms)",
+    "midi-recording-offset-description":
+      "Positive values move newly recorded notes earlier. Negative values move them later.",
+    "midi-quantize-while-recording": "Quantize while recording",
+    "midi-quantize-while-recording-description":
+      "Snap recorded note starts to the piano-roll grid.",
     inputs: "Inputs",
     outputs: "Outputs",
     "no-inputs": "No input devices found",
@@ -469,6 +475,12 @@ export default {
     language: "Langue",
     theme: "Thème",
     "midi-settings": "Paramètres MIDI",
+    "midi-recording-offset": "Décalage d’enregistrement (ms)",
+    "midi-recording-offset-description":
+      "Les valeurs positives avancent les notes nouvellement enregistrées. Les valeurs négatives les retardent.",
+    "midi-quantize-while-recording": "Quantifier pendant l’enregistrement",
+    "midi-quantize-while-recording-description":
+      "Aligne le début des notes enregistrées sur la grille du piano roll.",
     inputs: "Entrées",
     outputs: "Sorties",
     "no-inputs": "Pas d'entrées trouvées",
@@ -843,6 +855,12 @@ export default {
     language: "言語",
     theme: "テーマ",
     "midi-settings": "MIDI設定",
+    "midi-recording-offset": "録音オフセット (ms)",
+    "midi-recording-offset-description":
+      "正の値は新しく録音するノートを前に、負の値は後ろに移動します。",
+    "midi-quantize-while-recording": "録音時にクオンタイズ",
+    "midi-quantize-while-recording-description":
+      "録音したノートの開始位置をピアノロールのグリッドに合わせます。",
     inputs: "入力",
     outputs: "出力",
     "no-inputs": "入力デバイスが見つかりません",
@@ -1214,6 +1232,12 @@ export default {
     language: "语言",
     theme: "Theme",
     "midi-settings": "MIDI设置",
+    "midi-recording-offset": "录制偏移（毫秒）",
+    "midi-recording-offset-description":
+      "正值使新录制的音符提前，负值使音符延后。",
+    "midi-quantize-while-recording": "录制时量化",
+    "midi-quantize-while-recording-description":
+      "将录制音符的起点对齐到钢琴卷帘网格。",
     inputs: "输入",
     outputs: "输出",
     "no-inputs": "No input devices found",
@@ -1586,6 +1610,11 @@ export default {
     language: "語言",
     theme: "Theme",
     "midi-settings": "MIDI設定",
+    "midi-recording-offset": "錄製偏移（毫秒）",
+    "midi-recording-offset-description": "正值會提前新錄製的音符，負值會延後。",
+    "midi-quantize-while-recording": "錄製時量化",
+    "midi-quantize-while-recording-description":
+      "將錄製音符的起點對齊到鋼琴捲軸格線。",
     inputs: "輸入",
     outputs: "輸出",
     "no-inputs": "無連接的裝置",
@@ -1958,6 +1987,12 @@ export default {
     language: "Jazyk",
     theme: "Téma",
     "midi-settings": "MIDI nastavenia",
+    "midi-recording-offset": "Posun nahrávania (ms)",
+    "midi-recording-offset-description":
+      "Kladné hodnoty posunú novo nahraté noty skôr, záporné neskôr.",
+    "midi-quantize-while-recording": "Kvantizovať počas nahrávania",
+    "midi-quantize-while-recording-description":
+      "Zarovná začiatky nahratých nôt podľa mriežky klavírneho editora.",
     inputs: "Vstupy",
     outputs: "Výstupy",
     "no-inputs": "Nenájdené žiadne vstupné zariadenia",

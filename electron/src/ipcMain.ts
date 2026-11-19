@@ -59,7 +59,7 @@ const api = ({
     }
     const path = fileObj.filePaths[0]
     const content = await readFile(path)
-    return { path, content: content.buffer }
+    return { path, content: Uint8Array.from(content).buffer }
   },
   showOpenDirectoryDialog: async () => {
     const fileObj = await dialog.showOpenDialog({
@@ -72,12 +72,12 @@ const api = ({
     return path
   },
   saveFile: async (_e: IpcMainInvokeEvent, path: string, data: ArrayBuffer) => {
-    await writeFile(path, Buffer.from(data))
+    await writeFile(path, new Uint8Array(data))
   },
   readFile: async (_e: IpcMainInvokeEvent, path: string) => {
     const filePath = isAbsolute(path) ? path : join(app.getAppPath(), path)
     const content = await readFile(filePath)
-    return content.buffer
+    return Uint8Array.from(content).buffer
   },
   searchSoundFonts: async (_e: IpcMainInvokeEvent, path: string) => {
     const files = await readdir(path, { withFileTypes: true })

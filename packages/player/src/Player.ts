@@ -1,6 +1,5 @@
 import { type Observable, ObservableValue } from "@signal-app/observable"
 import range from "lodash/range.js"
-import throttle from "lodash/throttle.js"
 import { type AnyEvent, MIDIControlEvents } from "midifile-ts"
 import { EventScheduler, type EventSchedulerSource } from "./EventScheduler.js"
 import { controllerMidiEvent, gsResetMidiEvent } from "./MidiEventFactory.js"
@@ -23,6 +22,8 @@ export type IEventSource = EventSchedulerSource<PlayerEvent>
 export class Player {
   private scheduler: EventScheduler<PlayerEvent> | null = null
   private interval: number | null = null
+  private positionFrame: number | null = null
+  private followPlaybackFrom = -Infinity
 
   private readonly _currentTempo = new ObservableValue(DEFAULT_TEMPO)
   private readonly _currentTick = new ObservableValue(0)
@@ -38,6 +39,8 @@ export class Player {
   constructor(
     private readonly output: SynthOutput,
     private readonly eventSource: IEventSource,
+    private readonly getPlaybackTimestamp: () => number = () =>
+      performance.now(),
   ) {
     this.onPositionChanged = this._currentTick.onChanged
     this.onIsPlayingChanged = this._isPlaying.onChanged
@@ -57,6 +60,8 @@ export class Player {
       this._currentTick.value,
       TIMER_INTERVAL + LOOK_AHEAD_TIME,
     )
+    this.followPlaybackFrom = -Infinity
+    this.positionFrame = window.requestAnimationFrame(this.syncPosition)
     this._isPlaying.set(true)
     this.output.activate()
     this.interval = window.setInterval(() => this._onTimer(), TIMER_INTERVAL)
@@ -71,12 +76,20 @@ export class Player {
       return
     }
     tick = Math.min(Math.max(Math.floor(tick), 0), this.eventSource.endOfSong)
-    this.scheduler?.scheduleSeek(tick)
+    if (this.scheduler !== null) {
+      this.scheduler.scheduleSeek(tick)
+      this.followPlaybackFrom = Infinity
+    }
     this._currentTick.set(tick)
   }
 
   get position() {
     return this._currentTick.value
+  }
+
+  /** Map a timestamp in the scheduling clock (performance.now()) to a song tick. */
+  getTickAtTime(timestamp: number): number {
+    return this.scheduler?.getTickAtTime(timestamp) ?? this.position
   }
 
   get isPlaying() {
@@ -158,11 +171,12 @@ export class Player {
 
   stop = () => {
     this.scheduler?.scheduleStop()
-    // prevent a pending throttled sync from overwriting a position set right after stop()
-    this.syncPosition.cancel()
+    // Keep a position set right after stop() from being overwritten.
+    this.cancelPositionSync()
   }
 
   private finalizeStop() {
+    this.cancelPositionSync()
     this.scheduler = null
     this._isPlaying.set(false)
 
@@ -196,11 +210,23 @@ export class Player {
     this.output.sendEvent(event, delayTime, timestampNow, trackId)
   }
 
-  private syncPosition = throttle(() => {
-    if (this.scheduler !== null) {
-      this._currentTick.set(this.scheduler.scheduledTick)
+  private syncPosition = () => {
+    if (this.scheduler === null || this.positionFrame === null) {
+      return
     }
-  }, 50)
+    this.positionFrame = window.requestAnimationFrame(this.syncPosition)
+    const timestamp = this.getPlaybackTimestamp()
+    if (timestamp >= this.followPlaybackFrom) {
+      this._currentTick.set(this.scheduler.getTickAtTime(timestamp))
+    }
+  }
+
+  private cancelPositionSync() {
+    if (this.positionFrame !== null) {
+      window.cancelAnimationFrame(this.positionFrame)
+      this.positionFrame = null
+    }
+  }
 
   private applyPlayerEvent(
     e: DistributiveOmit<AnyEvent, "deltaTime" | "channel">,
@@ -228,6 +254,10 @@ export class Player {
       this._currentTempo.value,
       timestamp,
     )
+    if (this.followPlaybackFrom === Infinity) {
+      // Keep the requested position visible until the queued seek is audible.
+      this.followPlaybackFrom = timestamp + this.scheduler.lookAheadTime
+    }
 
     events.forEach(({ event: e, timestamp: time }) => {
       if (
@@ -245,8 +275,6 @@ export class Player {
     if (shouldStop) {
       this.finalizeStop()
     }
-
-    this.syncPosition()
   }
 
   // convenience methods

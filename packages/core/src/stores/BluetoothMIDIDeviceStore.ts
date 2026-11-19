@@ -105,6 +105,7 @@ export class BluetoothMIDIDeviceStore {
       if (this.enabledInputs[device.id]) {
         this.midiInput.onMidiMessage({
           data: (event as MIDIMessageEvent).message.message.slice(0),
+          timeStamp: event.timeStamp,
         })
       }
     })

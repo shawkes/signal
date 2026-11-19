@@ -1,4 +1,5 @@
 import styled from "@emotion/styled"
+import { MAX_MIDI_RECORDING_OFFSET_MS } from "@signal-app/core"
 import {
   Alert,
   Checkbox,
@@ -7,9 +8,18 @@ import {
   DialogSectionTitle,
   Label,
   RadioButton,
+  TextField,
 } from "@signal-app/ui"
 import BluetoothIcon from "mdi-react/BluetoothIcon"
-import { type FC, useCallback, useMemo } from "react"
+import {
+  type FC,
+  useCallback,
+  useId,
+  useMemo,
+  useState,
+  useSyncExternalStore,
+} from "react"
+import { useStores } from "../../../hooks/useStores"
 import { Localized } from "../../../localize/useLocalization"
 import { useBLEMIDIDevice } from "../hooks/useBLEMIDIDevice"
 import { type Device, useMIDIDevice } from "../hooks/useMIDIDevice"
@@ -48,6 +58,75 @@ const DeviceList = styled.div``
 const Notice = styled.div`
   color: var(--color-text-secondary);
 `
+
+const RecordingSettingsGroup = styled.div`
+  margin-top: 2rem;
+`
+
+const OffsetInput = styled(TextField)`
+  width: 7rem;
+  height: 2rem;
+  padding: 0 0.5rem;
+`
+
+const SettingHint = styled(Notice)`
+  margin-top: 0.5rem;
+  font-size: 0.8rem;
+`
+
+const RecordingSettings: FC = () => {
+  const { midiDeviceStore } = useStores()
+  const offset = useSyncExternalStore(
+    midiDeviceStore.onRecordingOffsetMsChanged.subscribe,
+    useCallback(() => midiDeviceStore.recordingOffsetMs, [midiDeviceStore]),
+  )
+  const quantizeWhileRecording = useSyncExternalStore(
+    midiDeviceStore.onQuantizeWhileRecordingChanged.subscribe,
+    useCallback(
+      () => midiDeviceStore.quantizeWhileRecording,
+      [midiDeviceStore],
+    ),
+  )
+  const [draft, setDraft] = useState<string | null>(null)
+  const offsetHintId = useId()
+  const quantizeHintId = useId()
+
+  return (
+    <RecordingSettingsGroup>
+      <Label>
+        <Localized name="midi-recording-offset" />
+        <OffsetInput
+          aria-describedby={offsetHintId}
+          type="number"
+          min={-MAX_MIDI_RECORDING_OFFSET_MS}
+          max={MAX_MIDI_RECORDING_OFFSET_MS}
+          step="any"
+          value={draft ?? offset}
+          onChange={({ currentTarget }) => {
+            setDraft(currentTarget.value)
+            midiDeviceStore.setRecordingOffsetMs(currentTarget.valueAsNumber)
+          }}
+          onBlur={() => setDraft(null)}
+        />
+      </Label>
+      <SettingHint id={offsetHintId}>
+        <Localized name="midi-recording-offset-description" />
+      </SettingHint>
+      <Checkbox
+        aria-describedby={quantizeHintId}
+        checked={quantizeWhileRecording}
+        onCheckedChange={(checked) =>
+          midiDeviceStore.setQuantizeWhileRecording(checked === true)
+        }
+        style={{ marginTop: "1rem" }}
+        label={<Localized name="midi-quantize-while-recording" />}
+      />
+      <SettingHint id={quantizeHintId}>
+        <Localized name="midi-quantize-while-recording-description" />
+      </SettingHint>
+    </RecordingSettingsGroup>
+  )
+}
 
 const SectionTitle = styled.div`
   font-weight: bold;
@@ -166,6 +245,7 @@ export const MIDIDeviceView: FC = () => {
                 />
               ))}
             </DeviceList>
+            <RecordingSettings />
             <SectionTitle>
               <Localized name="midi-routing" />
             </SectionTitle>

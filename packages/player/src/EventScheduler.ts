@@ -14,6 +14,14 @@ interface Jump {
   to: number
 }
 
+interface PlaybackAnchor {
+  timestamp: number
+  tick: number
+  bpm: number
+}
+
+const PLAYBACK_HISTORY_MS = 2000
+
 export interface EventSchedulerSource<E extends SchedulableEvent> {
   timebase: number
   endOfSong: number
@@ -56,6 +64,7 @@ export class EventScheduler<E extends SchedulableEvent> {
   private _isStopScheduled = false
   private _scheduledSeekTick: number | null = null
   private _enqueuedEvents: readonly Omit<E, "tick">[] = []
+  private readonly playbackAnchors: PlaybackAnchor[] = []
 
   constructor(
     private readonly eventSource: EventSchedulerSource<E>,
@@ -81,6 +90,40 @@ export class EventScheduler<E extends SchedulableEvent> {
     return (((ms / 1000) * bpm) / 60) * this.timebase
   }
 
+  getTickAtTime(timestamp: number): number {
+    for (let i = this.playbackAnchors.length - 1; i >= 0; i--) {
+      const anchor = this.playbackAnchors[i]
+      if (anchor.timestamp <= timestamp) {
+        return (
+          anchor.tick +
+          this.millisecToTick(timestamp - anchor.timestamp, anchor.bpm)
+        )
+      }
+    }
+    return this.playbackAnchors[0]?.tick ?? this._currentTick
+  }
+
+  private rememberPlaybackAnchor(anchor: PlaybackAnchor) {
+    const last = this.playbackAnchors[this.playbackAnchors.length - 1]
+    // The scheduler may already have queued a jump that has yet to play.
+    if (last !== undefined && last.timestamp > anchor.timestamp) {
+      return
+    }
+    if (last?.timestamp === anchor.timestamp) {
+      this.playbackAnchors[this.playbackAnchors.length - 1] = anchor
+    } else {
+      this.playbackAnchors.push(anchor)
+    }
+
+    const cutoff = anchor.timestamp - PLAYBACK_HISTORY_MS
+    while (
+      this.playbackAnchors.length > 1 &&
+      this.playbackAnchors[1].timestamp < cutoff
+    ) {
+      this.playbackAnchors.shift()
+    }
+  }
+
   scheduleSeek(tick: number) {
     this._scheduledSeekTick = tick
   }
@@ -95,14 +138,16 @@ export class EventScheduler<E extends SchedulableEvent> {
   }
 
   readNextEvents(bpm: number, timestamp: number): SchedulerResult<E> {
+    const timeAtTick = (tick: number, currentTick: number) =>
+      timestamp +
+      Math.max(0, tickToMillisec(tick - currentTick, bpm, this.timebase))
+
     const withTimestamp =
       (currentTick: number) =>
-      (e: E): WithTimestamp<E> => {
-        const waitTick = e.tick - currentTick
-        const delayedTime =
-          timestamp + Math.max(0, tickToMillisec(waitTick, bpm, this.timebase))
-        return { event: e, timestamp: delayedTime }
-      }
+      (e: E): WithTimestamp<E> => ({
+        event: e,
+        timestamp: timeAtTick(e.tick, currentTick),
+      })
 
     const getEventsInRange = (
       startTick: number,
@@ -120,6 +165,7 @@ export class EventScheduler<E extends SchedulableEvent> {
     const deltaTick = Math.max(0, this.millisecToTick(delta, bpm))
     const nowTick = this._currentTick + deltaTick
     const lookAheadTick = this.millisecToTick(this.lookAheadTime, bpm)
+    this.rememberPlaybackAnchor({ timestamp, tick: nowTick, bpm })
 
     // Process from the last scheduled point to the lookahead time
     const startTick = this._scheduledTick
@@ -175,6 +221,11 @@ export class EventScheduler<E extends SchedulableEvent> {
     }
 
     if (jump) {
+      this.rememberPlaybackAnchor({
+        timestamp: timeAtTick(jump.from, nowTick),
+        tick: jump.to,
+        bpm,
+      })
       const offset = endTick - jump.from
       const endTick2 = jump.to + offset
       const currentTick = jump.to - (jump.from - nowTick)

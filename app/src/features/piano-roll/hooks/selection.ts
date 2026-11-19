@@ -1,8 +1,8 @@
 import { PianoNotesClipboardDataSchema } from "@signal-app/pianoroll-editor"
 import { useCallback } from "react"
 import { useHistory } from "../../../hooks/useHistory"
-import { usePlayer } from "../../../hooks/usePlayer"
 import { usePreviewNote } from "../../../hooks/usePreviewNote"
+import { useStores } from "../../../hooks/useStores"
 import {
   readClipboardData,
   readJSONFromClipboard,
@@ -96,12 +96,13 @@ export const useDeleteSelection = () => {
 
 // Paste notes copied to the current position
 export const usePasteSelection = () => {
-  const { position } = usePlayer()
+  const { player } = useStores()
   const { pushHistory } = useHistory()
   const pianoRollEditor = usePianoRollEditor()
 
   return useCallback(
     async (e?: ClipboardEvent) => {
+      const position = player.position
       const obj = e ? readJSONFromClipboard(e) : await readClipboardData()
       const { data } = PianoNotesClipboardDataSchema.safeParse(obj)
 
@@ -113,7 +114,7 @@ export const usePasteSelection = () => {
 
       pianoRollEditor.addClipboardNotes(data, position)
     },
-    [pianoRollEditor, position, pushHistory],
+    [pianoRollEditor, player, pushHistory],
   )
 }
 

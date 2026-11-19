@@ -8,7 +8,12 @@ import {
   type SongStore,
   type TrackId,
 } from "@signal-app/core"
-import type { IEventSource, PlayerEvent } from "@signal-app/player"
+import {
+  type IEventSource,
+  METRONOME_ACCENT,
+  METRONOME_BEAT,
+  type PlayerEvent,
+} from "@signal-app/player"
 
 export const METRONOME_TRACK_ID = 99999 as TrackId
 
@@ -28,7 +33,7 @@ export class EventSource implements IEventSource {
     const range = Range.create(startTick, endTick)
     const beatEvents = Beat.createInRange(song.measures, song.timebase, range)
       .filter(isEventInRange(range))
-      .flatMap((b) => beatToEvents(b))
+      .map(beatToEvent)
     return (song.allEvents as PlayerEvent[])
       .filter(isEventInRange(range))
       .concat(beatEvents)
@@ -42,14 +47,12 @@ export class EventSource implements IEventSource {
   }
 }
 
-function beatToEvents(beat: Beat): PlayerEvent[] {
-  const velocity = beat.beat === 0 ? 100 : 70
-  const noteNumber = beat.beat === 0 ? 76 : 77
-  return [
-    {
-      ...noteOnMidiEvent(0, 9, noteNumber, velocity),
-      tick: beat.tick,
-      trackId: METRONOME_TRACK_ID,
-    },
-  ]
+function beatToEvent(beat: Beat): PlayerEvent {
+  const { noteNumber, velocity } =
+    beat.beat === 0 ? METRONOME_ACCENT : METRONOME_BEAT
+  return {
+    ...noteOnMidiEvent(0, 9, noteNumber, velocity),
+    tick: beat.tick,
+    trackId: METRONOME_TRACK_ID,
+  }
 }

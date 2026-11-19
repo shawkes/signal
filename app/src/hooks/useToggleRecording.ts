@@ -1,9 +1,11 @@
 import { useCallback } from "react"
+import { usePianoRollQuantizer } from "../features/piano-roll/hooks/usePianoRoll"
 import { usePlayer } from "./usePlayer"
 import { useStores } from "./useStores"
 
 export const useToggleRecording = () => {
-  const { midiRecorder } = useStores()
+  const { midiDeviceStore, midiRecorder } = useStores()
+  const { forceQuantizeRound } = usePianoRollQuantizer()
   const { play, stop } = usePlayer()
 
   return useCallback(() => {
@@ -11,8 +13,10 @@ export const useToggleRecording = () => {
       midiRecorder.stop()
       stop()
     } else {
-      midiRecorder.start()
+      midiRecorder.start(
+        midiDeviceStore.quantizeWhileRecording ? forceQuantizeRound : undefined,
+      )
       play()
     }
-  }, [midiRecorder, play, stop])
+  }, [forceQuantizeRound, midiDeviceStore, midiRecorder, play, stop])
 }

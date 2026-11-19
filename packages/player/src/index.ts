@@ -1,3 +1,4 @@
+export * from "./MetronomeSynth.js"
 export * from "./Player.js"
 export * from "./PlayerEvent.js"
 export * from "./renderAudio.js"

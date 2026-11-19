@@ -33,6 +33,9 @@ export class GroupOutput implements SynthOutput {
   setIsMetronomeEnabled(enabled: boolean) {
     if (this._isMetronomeEnabled !== enabled) {
       this._isMetronomeEnabled = enabled
+      if (enabled) {
+        this.metronomeOutput.activate()
+      }
       this.emitIsMetronomeEnabledChanged()
     }
   }

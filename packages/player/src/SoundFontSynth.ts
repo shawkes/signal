@@ -1,5 +1,6 @@
 import type { MIDIController } from "spessasynth_core"
 import { WorkletSynthesizer } from "spessasynth_lib"
+import { getScheduledAudioTime } from "./getScheduledAudioTime.js"
 import type { SoundFont } from "./SoundFont.js"
 import type { SendableEvent, SynthOutput } from "./SynthOutput.js"
 
@@ -121,14 +122,16 @@ export class SoundFontSynth implements SynthOutput {
   sendEvent(
     event: SendableEvent,
     delayTime: number = 0,
-    _timestampNow: number = performance.now(),
+    timestampNow: number = performance.now(),
     _trackId?: number,
   ) {
     if (!this.synth) {
       return
     }
-    const eventTime = this.synth.currentTime + delayTime
-    this.postSynthMessage(event, eventTime)
+    this.postSynthMessage(
+      event,
+      getScheduledAudioTime(this.context, delayTime, timestampNow),
+    )
   }
 
   activate() {

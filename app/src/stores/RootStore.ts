@@ -4,9 +4,15 @@ import {
   MIDIInput,
   SongStore,
 } from "@signal-app/core"
-import { Player, SoundFont, SoundFontSynth } from "@signal-app/player"
+import {
+  MetronomeSynth,
+  Player,
+  SoundFont,
+  SoundFontSynth,
+} from "@signal-app/player"
 import { isRunningInElectron } from "../helpers/platform"
 import { EventSource } from "../player/EventSource"
+import { getRenderTimeForOutputTime } from "../player/getRenderTimeForOutputTime"
 import { AutoSaveService } from "../services/AutoSaveService"
 import { GroupOutput } from "../services/GroupOutput"
 import { MIDIMonitor } from "../services/MIDIMonitor"
@@ -18,7 +24,7 @@ export default class RootStore {
   readonly midiDeviceStore: MIDIDeviceStore
   readonly player: Player
   readonly synth: SoundFontSynth
-  readonly metronomeSynth: SoundFontSynth
+  readonly metronomeSynth: MetronomeSynth
   readonly synthGroup: GroupOutput
   readonly midiInput: MIDIInput
   readonly midiRecorder: MIDIRecorder
@@ -28,13 +34,17 @@ export default class RootStore {
 
   constructor() {
     const context = new (window.AudioContext || window.webkitAudioContext)()
+    const toRenderTime = (timestamp: number) =>
+      getRenderTimeForOutputTime(context, timestamp)
     this.synth = new SoundFontSynth(context)
-    this.metronomeSynth = new SoundFontSynth(context)
+    this.metronomeSynth = new MetronomeSynth(context)
     this.synthGroup = new GroupOutput(this.metronomeSynth)
     this.synthGroup.outputs.push({ synth: this.synth, isEnabled: true })
 
     const eventSource = new EventSource(this.songStore)
-    this.player = new Player(this.synthGroup, eventSource)
+    this.player = new Player(this.synthGroup, eventSource, () =>
+      toRenderTime(performance.now()),
+    )
 
     this.midiDeviceStore = new MIDIDeviceStore()
     this.midiInput = new MIDIInput(this.midiDeviceStore)
@@ -44,6 +54,7 @@ export default class RootStore {
       this.player,
       this.midiDeviceStore,
       this.midiInput,
+      toRenderTime,
     )
     this.midiMonitor = new MIDIMonitor(this.player, this.midiDeviceStore)
 
@@ -65,7 +76,7 @@ export default class RootStore {
 
   private async setupMetronomeSynth() {
     const data = await loadMetronomeSoundFontData()
-    await this.metronomeSynth.loadSoundFont(await SoundFont.load(data))
+    this.metronomeSynth.loadSoundFont(await SoundFont.load(data))
   }
 }
 
