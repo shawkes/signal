@@ -9,6 +9,20 @@ public interface IMonitorSynth
 
     /// <summary>Overwrites this interleaved stereo block. Called on the audio thread.</summary>
     void Render(Span<float> interleavedStereo);
+
+    /// <summary>Silences voices and restores channel state on the audio thread before a transport jump.</summary>
+    void Reset()
+    {
+        for (int channel = 0; channel < 16; channel++)
+        {
+            byte control = (byte)(0xb0 | channel);
+            ProcessMidi(control, 120, 0);
+            ProcessMidi(control, 121, 0);
+            ProcessMidi(control, 0, 0);
+            ProcessMidi(control, 32, 0);
+            ProcessMidi((byte)(0xc0 | channel), 0, 0);
+        }
+    }
 }
 
 public sealed class SilentMonitorSynth : IMonitorSynth
@@ -20,4 +34,6 @@ public sealed class SilentMonitorSynth : IMonitorSynth
     public void ProcessMidi(byte status, byte data1, byte data2) { }
 
     public void Render(Span<float> interleavedStereo) => interleavedStereo.Clear();
+
+    public void Reset() { }
 }

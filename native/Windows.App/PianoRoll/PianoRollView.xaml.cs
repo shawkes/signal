@@ -56,6 +56,7 @@ public sealed partial class PianoRollView : UserControl
             RefreshViewport();
             DispatcherQueue.TryEnqueue(DispatcherQueuePriority.Low, ApplyReveal);
         };
+        Unloaded += (_, _) => CancelRulerGesture();
         ActualThemeChanged += (_, _) => ApplyPalette();
         ApplyPalette();
         RefreshDocument();
@@ -71,6 +72,8 @@ public sealed partial class PianoRollView : UserControl
             {
                 CancelGesture();
                 Surface.ReleasePointerCaptures();
+                CancelRulerGesture();
+                RulerInput.ReleasePointerCaptures();
             }
             RefreshSelection();
         }
@@ -89,6 +92,11 @@ public sealed partial class PianoRollView : UserControl
         {
             CancelGesture();
             Surface.ReleasePointerCaptures();
+        }
+        if (_rulerPointerId is not null)
+        {
+            CancelRulerGesture();
+            RulerInput.ReleasePointerCaptures();
         }
         if (_document is not null)
             _document.Changed -= RefreshDocument;
@@ -132,15 +140,16 @@ public sealed partial class PianoRollView : UserControl
         long? previous = _playhead;
         _playhead = tick;
         RefreshPlayhead();
-        if (tick is not { } active || _pointerId is not null || !IsLoaded || EditorScroll.ViewportWidth <= 0)
+        if (tick is not { } active || _pointerId is not null || _rulerPointerId is not null
+            || !IsLoaded || EditorScroll.ViewportWidth <= 0)
             return;
 
         double left = EditorScroll.HorizontalOffset;
         double right = left + EditorScroll.ViewportWidth;
         double x = TickX(active);
-        bool startedOutsideView = previous is null && (x < left || x >= right);
-        bool crossedRightEdge = previous is { } prior && TickX(prior) >= left && TickX(prior) < right && x >= right;
-        if (startedOutsideView || crossedRightEdge)
+        bool outsideView = x < left || x >= right;
+        bool wasVisible = previous is { } prior && TickX(prior) >= left && TickX(prior) < right;
+        if (outsideView && (previous is null || wasVisible))
             EditorScroll.ChangeView(Math.Clamp(x - CellWidth, 0, EditorScroll.ScrollableWidth), null, null, true);
     }
 
@@ -148,9 +157,10 @@ public sealed partial class PianoRollView : UserControl
     {
         _palette = ActualTheme == ElementTheme.Light ? Palette.Light : Palette.Dark;
         Surface.Background = _palette.NaturalLane;
-        Corner.Background = Timeline.Background = _palette.Ruler;
+        Corner.Background = RulerInput.Background = _palette.Ruler;
         PitchKeys.Background = _palette.Ruler;
         Cursor.Fill = _rulerCursor.Fill = _palette.Playhead;
+        GridLoopShade.Fill = RulerLoopFill.Fill = RulerLoopStart.Fill = RulerLoopEnd.Fill = _palette.Loop;
         PaintPitchLanes();
         PaintNotes();
         RefreshViewport();
@@ -175,7 +185,7 @@ public sealed partial class PianoRollView : UserControl
     private void UpdateSurfaceExtent()
     {
         long trackEnd = _document?.Notes.Select(item => item.Note.StartTick + item.Note.LengthTicks).DefaultIfEmpty().Max() ?? 0;
-        long lastTick = Math.Max(_timelineEnd, trackEnd);
+        long lastTick = Math.Max(Math.Max(_timelineEnd, trackEnd), _loopRange?.EndTick ?? 0);
         double bars = Math.Max(4.0, Math.Floor(lastTick / (double)TicksPerBar) + 2);
         double width = bars * BeatsPerBar * BeatWidth;
         if (Surface.Width == width)
@@ -251,6 +261,7 @@ public sealed partial class PianoRollView : UserControl
                 accidental ? _palette.AccidentalKeyText : _palette.NaturalKeyText, pitch % 12 == 0);
         }
         RefreshPlayhead();
+        RefreshLoopRangeVisuals();
     }
 
     private void PaintNotes()
@@ -372,7 +383,7 @@ public sealed partial class PianoRollView : UserControl
 
     private void SurfacePointerPressed(object sender, PointerRoutedEventArgs args)
     {
-        if (!_editingEnabled || _document is null || _pointerId is not null)
+        if (!_editingEnabled || _document is null || _pointerId is not null || _rulerPointerId is not null)
             return;
         var point = args.GetCurrentPoint(Surface);
         if (!point.Properties.IsLeftButtonPressed || !IsWithinSurface(point.Position))
@@ -467,7 +478,7 @@ public sealed partial class PianoRollView : UserControl
 
     private void EditorKeyDown(object sender, KeyRoutedEventArgs args)
     {
-        if (!_editingEnabled || _document is null || _pointerId is not null)
+        if (!_editingEnabled || _document is null || _pointerId is not null || _rulerPointerId is not null)
             return;
 
         bool control = IsDown(VirtualKey.Control);
@@ -553,6 +564,8 @@ public sealed partial class PianoRollView : UserControl
     private void EditorViewChanged(object sender, ScrollViewerViewChangedEventArgs args)
     {
         RefreshViewport();
+        if (_rulerPointerId is not null)
+            PreviewLoopDrag(_rulerPointerX);
         if (_reveal is not null)
             DispatcherQueue.TryEnqueue(DispatcherQueuePriority.Low, ApplyReveal);
     }
@@ -667,21 +680,22 @@ public sealed partial class PianoRollView : UserControl
         Brush NaturalLane, Brush AccidentalLane, Brush MinorLine, Brush BeatLine, Brush MajorLine,
         Brush Ruler, Brush RulerText, Brush RulerMuted,
         Brush NaturalKey, Brush AccidentalKey, Brush NaturalKeyText, Brush AccidentalKeyText,
-        Brush Note, Brush NoteOutline, Brush SelectedNote, Brush SelectedOutline, Brush NoteText, Brush Handle, Brush Playhead)
+        Brush Note, Brush NoteOutline, Brush SelectedNote, Brush SelectedOutline, Brush NoteText, Brush Handle,
+        Brush Playhead, Brush Loop)
     {
         public static Palette Dark { get; } = new(
             Color(0x182432), Color(0x131D29), Color(0x273648), Color(0x374C63), Color(0x4A6078),
             Color(0x222F3E), Color(0xE5EAF1), Color(0xA3B5C8),
             Color(0xC5D2DF), Color(0x33465D), Color(0x172636), Color(0xE2EBF4),
             Color(0x57BAA9), Color(0x64CDB8), Color(0x96E7D4), Color(0xE2FFF9),
-            Color(0x132D2A), Color(0x326952), Color(0xFFC16C));
+            Color(0x132D2A), Color(0x326952), Color(0xFFC16C), Color(0x76B9FF));
 
         public static Palette Light { get; } = new(
             Color(0xF8FAFD), Color(0xEEF3F9), Color(0xDEE7F0), Color(0xC7D6E4), Color(0xA6BBCC),
             Color(0xE4EDF6), Color(0x22384D), Color(0x4B637B),
             Color(0xF4F7FC), Color(0x3B526A), Color(0x1B3043), Color(0xF0F5FB),
             Color(0x7BCCBA), Color(0x318574), Color(0x63C5AD), Color(0x134D43),
-            Color(0x112E29), Color(0x376F64), Color(0xA75314));
+            Color(0x112E29), Color(0x376F64), Color(0xA75314), Color(0x0C65B4));
 
         private static SolidColorBrush Color(uint rgb) =>
             new(global::Windows.UI.Color.FromArgb(255, (byte)(rgb >> 16), (byte)(rgb >> 8), (byte)rgb));

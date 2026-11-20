@@ -63,7 +63,19 @@
                     <TextBlock Text="Pitch" Margin="10,0,0,0" VerticalAlignment="Center"
                                Style="{StaticResource CaptionTextBlockStyle}" />
                 </Border>
-                <Canvas x:Name="Timeline" Grid.Column="1" IsHitTestVisible="False" />
+                <Grid x:Name="RulerInput" Grid.Column="1"
+                      AutomationProperties.Name="Loop range ruler"
+                      ToolTipService.ToolTip="Drag to set the loop range. Drag either end to resize."
+                      PointerPressed="RulerPointerPressed" PointerMoved="RulerPointerMoved"
+                      PointerReleased="RulerPointerReleased" PointerCaptureLost="RulerPointerCanceled"
+                      PointerCanceled="RulerPointerCanceled">
+                    <Canvas IsHitTestVisible="False">
+                        <Rectangle x:Name="RulerLoopFill" Height="29" Visibility="Collapsed" />
+                        <Rectangle x:Name="RulerLoopStart" Canvas.Top="22" Height="7" Visibility="Collapsed" />
+                        <Rectangle x:Name="RulerLoopEnd" Canvas.Top="22" Height="7" Visibility="Collapsed" />
+                    </Canvas>
+                    <Canvas x:Name="Timeline" IsHitTestVisible="False" />
+                </Grid>
                 <Canvas x:Name="PitchKeys" Grid.Row="1" IsHitTestVisible="False" />
                 <ScrollViewer x:Name="EditorScroll" Grid.Row="1" Grid.Column="1"
                               HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto"
@@ -75,6 +87,9 @@
                           PointerMoved="SurfacePointerMoved" PointerReleased="SurfacePointerReleased"
                           PointerCaptureLost="SurfacePointerCanceled" PointerCanceled="SurfacePointerCanceled">
                         <Canvas x:Name="GridLayer" IsHitTestVisible="False" />
+                        <Canvas IsHitTestVisible="False">
+                            <Rectangle x:Name="GridLoopShade" Visibility="Collapsed" />
+                        </Canvas>
                         <Canvas x:Name="BeatLayer" IsHitTestVisible="False" />
                         <Canvas x:Name="NotesLayer" IsHitTestVisible="False" />
                         <Canvas x:Name="TransportLayer" IsHitTestVisible="False">

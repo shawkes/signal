@@ -45,6 +45,7 @@ public sealed partial class MainWindow : Window
         _startupMidiPath = startupMidiPath;
         AppWindow.Resize(new SizeInt32(1120, 760));
         TakeList.ItemsSource = _rows;
+        RollView.LoopRangeSelected += LoopRangeSelected;
         WorkspaceTabs.Loaded += OnLoaded;
         AppWindow.Closing += WindowClosing;
         Closed += OnClosed;
@@ -272,9 +273,14 @@ public sealed partial class MainWindow : Window
 
     private void MetronomeToggled(object sender, RoutedEventArgs args)
     {
+        bool enabled = MetronomeSwitch.IsOn;
+        SongMetronomeButton.IsChecked = enabled;
         if (_engine is not null)
-            _engine.MetronomeEnabled = MetronomeSwitch.IsOn;
+            _engine.MetronomeEnabled = enabled;
     }
+
+    private void SongMetronomeClicked(object sender, RoutedEventArgs args) =>
+        MetronomeSwitch.IsOn = SongMetronomeButton.IsChecked == true;
 
     private async void TestNoteClicked(object sender, RoutedEventArgs args)
     {
@@ -344,9 +350,11 @@ public sealed partial class MainWindow : Window
 
         try
         {
-            if (!engine.PlaySong(SnapshotSong(), new SoundFontPiano(_bank, engine.SampleRate, generalMidi: true)))
+            var loop = EnabledLoopRange(_loopRange, _loopEnabled, _songEndTick);
+            if (!engine.PlaySong(SnapshotSong(), new SoundFontPiano(_bank, engine.SampleRate, generalMidi: true), loop))
                 return;
 
+            _playingSongEndTick = _songEndTick;
             _playbackError = null;
             UpdatePlayhead();
             _playheadTimer.Start();
@@ -378,6 +386,7 @@ public sealed partial class MainWindow : Window
 
         _playing = tick.HasValue;
         UpdatePlaybackControls();
+        UpdateLoopDisplay();
     }
 
     private void UpdateReadout()
@@ -470,6 +479,7 @@ public sealed partial class MainWindow : Window
         SoundFontButton.IsEnabled = !_loadingBank;
         TestNoteButton.IsEnabled = pianoReady && !_testNoteHeld;
         MetronomeSwitch.IsEnabled = audioReady;
+        SongMetronomeButton.IsEnabled = audioReady;
         RecordButton.IsEnabled = audioReady && !_finishingTake && !_fileBusy;
         RecordButton.Content = _recording ? "Stop recording" : "Record test";
         ShowTakeButton.IsEnabled = _firstImportedNote is not null && !takeInProgress && !_fileBusy;
@@ -490,11 +500,15 @@ public sealed partial class MainWindow : Window
         PlayButton.IsEnabled = audioReady && _bank is not null && !_playing && !takeInProgress && !_fileBusy
             && _tracks.Any(track => track.Document.Notes.Count > 0);
         StopButton.IsEnabled = audioReady && _playing;
-        PlaybackStatusText.Text = _playing ? "Playing song" :
+        LoopButton.IsEnabled = !_fileBusy && !takeInProgress;
+        ClearLoopRangeButton.IsEnabled = !_fileBusy;
+        string status = _playbackError ?? (_playing ? "Playing song" :
             takeInProgress ? "Recording a take" :
-            _playbackError ?? (!audioReady ? "Check the audio output in Recording test" :
+            !audioReady ? "Check the audio output in Recording test" :
                 _loadingBank ? "Loading SoundFont…" :
                 _bank is null ? "Load a SoundFont in Recording test" : "");
+        PlaybackStatusText.Text = status;
+        PlaybackStatusText.Visibility = status.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void OnClosed(object sender, WindowEventArgs args)

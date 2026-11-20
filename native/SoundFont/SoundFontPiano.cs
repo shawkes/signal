@@ -44,4 +44,6 @@ public sealed class SoundFontPiano : IMonitorSynth
             interleavedStereo = interleavedStereo[(2 * frames)..];
         }
     }
+
+    public void Reset() => _synth.Reset();
 }

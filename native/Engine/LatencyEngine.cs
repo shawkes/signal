@@ -13,6 +13,7 @@ public sealed class LatencyEngine
     private readonly AudioSampleClock _clock;
     private readonly Recording _recording;
     private readonly NotePlayback _playback;
+    private readonly MetronomeMixer _mixMetronome;
     private readonly float[] _accent;
     private readonly float[] _beat;
     private IMonitorSynth _synth;
@@ -41,6 +42,7 @@ public sealed class LatencyEngine
         _synth = synth;
         _recording = new Recording(tempoMap, sampleRate);
         _playback = new NotePlayback(sampleRate);
+        _mixMetronome = MixClicks;
         _accent = BuildClick(sampleRate, 1600, 0.25f);
         _beat = BuildClick(sampleRate, 1100, 0.16f);
     }
@@ -60,7 +62,7 @@ public sealed class LatencyEngine
     /// <summary>The most recent stopped take, published after its held notes are closed.</summary>
     public long CompletedTakeId => Volatile.Read(ref _completedTakeId);
 
-    /// <summary>The rendered song position, zero while starting and null at the end or after stop.</summary>
+    /// <summary>The rendered song position, the start tick while starting and null after stop.</summary>
     public long? PlaybackTick => _playback.Tick;
 
     /// <summary>Starts an edited snapshot from tick zero using a separate synth owned by playback.</summary>
@@ -68,14 +70,17 @@ public sealed class LatencyEngine
         _playback.Start(notes, [], TempoMap, playbackSynth);
 
     /// <summary>Plays all tracks together on their own tempo map, without changing the recording clock.</summary>
-    public bool PlaySong(Song song, IMonitorSynth playbackSynth)
+    public bool PlaySong(Song song, IMonitorSynth playbackSynth, LoopRange? loop = null)
     {
         ArgumentNullException.ThrowIfNull(song);
         return _playback.Start(
             song.Tracks.SelectMany(track => track.Notes),
             song.Tracks.SelectMany(track => track.PlaybackMessages),
-            song.TempoMap, playbackSynth, song.Tracks.Select(track => track.EndTick).DefaultIfEmpty().Max());
+            song.TempoMap, playbackSynth, song.Tracks.Select(track => track.EndTick).DefaultIfEmpty().Max(), loop);
     }
+
+    /// <summary>Updates the current pass's loop. Null lets playback continue to the song end.</summary>
+    public void SetPlaybackLoop(LoopRange? loop) => _playback.SetLoop(loop);
 
     public void StopPlayback() => _playback.Stop();
 
@@ -206,12 +211,7 @@ public sealed class LatencyEngine
             synth.Render(interleavedStereo[(int)((currentFrame - firstFrame) * 2)..]);
         }
 
-        var playbackGrid = _playback.Render(interleavedStereo, firstFrame);
-        if (MetronomeEnabled)
-        {
-            var grid = playbackGrid ?? new PlaybackGrid(0, TempoMap);
-            MixClicks(interleavedStereo, firstFrame - grid.Origin, endFrame - grid.Origin, grid.TempoMap);
-        }
+        _playback.Render(interleavedStereo, firstFrame, TempoMap, MetronomeEnabled ? _mixMetronome : null);
     }
 
     private void Enqueue(RenderEvent input)
@@ -249,19 +249,21 @@ public sealed class LatencyEngine
         }
     }
 
-    private void MixClicks(Span<float> output, long firstFrame, long endFrame, TempoMap tempoMap)
+    private void MixClicks(Span<float> output, long firstFrame, TempoMap tempoMap, long firstAllowedOnset)
     {
         int clickLength = _beat.Length;
-        long earliest = Math.Max(0, firstFrame - clickLength + 1);
+        long endFrame = firstFrame + output.Length / 2;
+        long earliest = Math.Max(firstAllowedOnset, firstFrame - clickLength + 1);
         long bucket = earliest - earliest % clickLength;
         while (bucket < endFrame)
         {
             // Keep one click per click-length interval even if the MIDI tempo packs many beats
             // into one sample. The half-frame offset matches TickToSample's nearest rounding.
-            double bucketTick = tempoMap.SecondsToTick((bucket - 0.5) / SampleRate);
+            long firstOnset = Math.Max(bucket, firstAllowedOnset);
+            double bucketTick = tempoMap.SecondsToTick((firstOnset - 0.5) / SampleRate);
             long beat = Math.Max(0, (long)Math.Ceiling(bucketTick / tempoMap.TicksPerQuarter));
             long clickFrame = BeatFrame(beat, tempoMap);
-            if (clickFrame < bucket)
+            if (clickFrame < firstOnset)
                 clickFrame = BeatFrame(++beat, tempoMap);
             if (clickFrame >= endFrame)
                 break;

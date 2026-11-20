@@ -24,6 +24,13 @@ To open a file at launch, run `dotnet run --project native/Windows.App -c Releas
 
 The adapter supports MIDI formats 0 and 1 with PPQ timing. Convert SMPTE-timed files to PPQ and choose one sequence from a format 2 file before opening it. Saving retains source track order, tick resolution, tempo events, and existing non-note events such as time signatures and program changes. Playback renders General MIDI program changes and the controllers supported by MeltySynth. SysEx is retained on save.
 
+### Loop playback
+
+- Drag across the piano-roll ruler to mark a range. The endpoints snap to beats and can be dragged to adjust the selection.
+- Turn on **Loop**, then select **Play song**. All tracks repeat the highlighted range. With no selection, **Loop** repeats the whole song. **Clear range** returns to whole-song looping.
+- The loop can be changed during playback. Enabling a range while the playhead is outside it jumps to the range start. Turning **Loop** off lets playback continue from the current position to the end of the song. The range stays selected for the next play.
+- Turn on **Metronome** in the transport to hear the song's beat grid during playback. The click and notes follow the same tempo map at each loop boundary. Loop controls apply to the current session.
+
 ### Record a take
 
 1. On the **Recording test** tab, choose **Audio output** and **MIDI input**. **Play test note** exercises the monitor with synthetic MIDI if a keyboard is unavailable.
@@ -32,6 +39,8 @@ The adapter supports MIDI formats 0 and 1 with PPQ timing. Convert SMPTE-timed f
 4. Note the actual sample rate, engine period, and buffer capacity reported for the output device. Start with **Minimum**. If the output exhibits gaps on this endpoint under the target workload, repeat with **Conservative** and then **Default** until the run is clean. Record the actual values for each comparison. Frames divided by sample rate give the corresponding duration in seconds. The period is the render cadence and the capacity is the endpoint's allocated buffer size. [Microsoft low-latency audio documentation](https://learn.microsoft.com/en-us/windows-hardware/drivers/audio/low-latency-audio)
 
 ### Workspace verification
+
+All 39 Release tests passed. On the Remote Audio endpoint, a two-track MIDI passage repeated across a 120-to-90 BPM tempo change. All ten measured metronome onsets landed within one sample of their expected positions over three wraps. Both tracks rendered through A320U. Turning Loop off mid-pass let the song finish, with zero estimated underruns and clock failures.
 
 The Release build opened a two-track MIDI file at 101 PPQ with a tempo change. All 29 automated tests passed, including format 0 and 1 round trips and sample scheduling across tempo changes. A separate round-trip playback probe rendered piano and bass through WASAPI with zero estimated underruns and clock failures.
 

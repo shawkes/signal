@@ -11,6 +11,7 @@ public sealed partial class MainWindow
 {
     private readonly List<EditableTrack> _tracks = [];
     private TempoMap _songTempo = TempoMap.Constant(120);
+    private long _songEndTick;
     private MidiFileDocument? _sourceFile;
     private string? _songPath;
     private bool _changingTrackList;
@@ -36,6 +37,8 @@ public sealed partial class MainWindow
         _songPath = path;
         _firstImportedNote = null;
         _playbackError = null;
+        _loopRange = null;
+        _loopEnabled = false;
 
         _changingTrackList = true;
         try
@@ -78,11 +81,16 @@ public sealed partial class MainWindow
 
     private void SongEdited()
     {
-        long endTick = _tracks.Max(track => Math.Max(track.Source.EndTick,
-            track.Document.Notes.Select(note => note.Note.StartTick + note.Note.LengthTicks).DefaultIfEmpty().Max()));
-        RollView.SetTimelineEnd(endTick);
+        _songEndTick = _tracks.Max(track => Math.Max(track.Source.EndTick,
+            track.Document.Notes.Select(item => item.Note)
+                .Select(note => note.LengthTicks == 0 && note.StartTick < long.MaxValue
+                    ? note.StartTick + 1
+                    : note.StartTick + note.LengthTicks)
+                .DefaultIfEmpty().Max()));
+        RollView.SetTimelineEnd(_songEndTick);
         UpdateSongName();
         UpdatePlaybackControls();
+        UpdateLoopDisplay();
     }
 
     private void UpdateSongName()
