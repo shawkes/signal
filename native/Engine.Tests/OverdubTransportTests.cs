@@ -103,6 +103,40 @@ public sealed class OverdubTransportTests
         Assert.False(engine.TryReadNote(out _));
     }
 
+    [Fact]
+    public void LoopCaptureAndReplayRenderWithoutManagedAllocationsAfterWarmup()
+    {
+        var engine = CreateEngine();
+        var song = new Song(TempoMap.Constant(120, 100), []);
+        var output = new float[64];
+        long frame = Origin;
+        ArmTake();
+        RenderBlocks();
+
+        ArmTake();
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        RenderBlocks();
+        Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
+
+        void ArmTake()
+        {
+            engine.RecordSong(song, SilentMonitorSynth.Instance, countIn: false, offsetMilliseconds: 0,
+                timestamp: frame, loop: Loop, overdubSynth: new GateSynth(OverdubLevel));
+            engine.TryEnqueue(new MidiMessage(frame + 20, 0x90, 64, 90));
+            engine.TryEnqueue(new MidiMessage(frame + 120, 0x80, 64, 0));
+            engine.TryEnqueue(new MidiMessage(frame + 450, 0x90, 65, 90));
+            engine.TryEnqueue(new MidiMessage(frame + 550, 0x80, 65, 0));
+            engine.TryEnqueue(new MidiMessage(frame + 990, 0x90, 66, 90));
+            engine.StopSongRecording(timestamp: frame + 1_050);
+        }
+
+        void RenderBlocks()
+        {
+            for (int block = 0; block < 40; block++, frame += output.Length / 2)
+                engine.Render(output, frame, new AudioClockAnchor(frame, frame));
+        }
+    }
+
     private static LatencyEngine CreateEngine() =>
         new(SampleRate, SilentMonitorSynth.Instance, timestampFrequency: SampleRate);
 

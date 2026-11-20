@@ -47,6 +47,39 @@ public sealed class LoopCaptureTests
         Assert.False(engine.TryReadNote(out _));
     }
 
+    [Theory]
+    [InlineData(460, 50, 874, 86, 10)]
+    [InlineData(300, -150, 912, 48, 48)]
+    public void SplitsThePlacedNoteWithoutLosingTheOriginalLength(int phase, int offset,
+        long expectedStart, long expectedTailLength, long expectedContinuationLength)
+    {
+        var engine = StartLoop(TempoMap.Constant(120), new LoopRange(480, 960), offset);
+        SendNote(engine, StartFrame + phase, StartFrame + phase + 100);
+
+        RenderThrough(engine, StartFrame + phase + 100);
+
+        Assert.True(engine.TryReadNote(out var tail));
+        Assert.Equal(new SongNote(expectedStart, expectedTailLength, 0, 60, 92), tail.ToSongNote());
+        Assert.True(engine.TryReadNote(out var continuation));
+        Assert.Equal(new SongNote(480, expectedContinuationLength, 0, 60, 92), continuation.ToSongNote());
+        Assert.Equal(100, tail.PlayedLengthFrames + continuation.PlayedLengthFrames);
+        Assert.False(engine.TryReadNote(out _));
+    }
+
+    [Fact]
+    public void AStartSnappedToTheExclusiveEndWrapsToTheNextDownbeat()
+    {
+        var engine = StartLoop(TempoMap.Constant(120), new LoopRange(480, 960), division: 16);
+        SendNote(engine, StartFrame + 475, StartFrame + 495);
+
+        RenderThrough(engine, StartFrame + 495);
+
+        Assert.True(engine.TryReadNote(out var note));
+        Assert.Equal(new SongNote(480, 19, 0, 60, 92), note.ToSongNote());
+        Assert.Equal(20, note.PlayedLengthFrames);
+        Assert.False(engine.TryReadNote(out _));
+    }
+
     [Fact]
     public void FinishesHeldNotesOnStopWithoutRepeatingIdenticalFullCycles()
     {

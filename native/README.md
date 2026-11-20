@@ -40,15 +40,15 @@ The adapter supports MIDI formats 0 and 1 with PPQ timing. Convert SMPTE-timed f
 
 ### Record in the song
 
-Select the track to record into and press **Record** on the piano-roll transport. Recording starts at bar 1 and plays the backing tracks while you monitor the selected instrument or drum kit. Tick **Count-in** to hear one measure at the song's opening tempo and time signature before bar 1. The count-in works with the regular metronome off. Notes played before bar 1 are excluded from the take.
+With **Loop** off, select a track and press **Record** on the piano-roll transport. Recording runs from bar 1 and plays the backing tracks while you monitor the selected instrument or drum kit. Tick **Count-in** to hear one measure at the song's opening tempo and time signature before bar 1. The count-in works with the regular metronome off. Notes played before bar 1 are excluded from the take.
 
-Press **Stop** to add the take as one undoable note edit. With **Loop** off, recording continues linearly from bar 1. Recording uses the offset and optional quantization in **Recording settings**.
+Press **Stop** to add the take as one undoable note edit. Recording uses the offset and optional quantization in **Recording settings**.
 
 ### Loop overdubbing
 
 - Select the destination track and drag on the piano-roll ruler to set the loop. Turn on **Loop** and press **Record**. With no range selected, **Record** loops the whole song. The range stays fixed for the take.
 - With **Count-in** on, one measure of clicks plays at the loop start's tempo in the song's opening meter. The transport then shows the pass number. The regular **Metronome** follows the song tempo map through each repeat.
-- Play over the backing tracks. Released notes join a later pass and repeat with the backing. A note held through a wrap is split at the loop boundary. The continuation starts at the beginning of the range.
+- Play over the backing tracks. Released notes join a later pass and repeat with the backing. If the placed note extends past the end of the range, it continues at the beginning. Live replay covers the first 2,048 captured note segments.
 - Press **Stop** to add all passes to the selected track. One **Undo** removes the whole overdub. Use regular MIDI save to keep the result.
 
 ### Test and calibrate recording

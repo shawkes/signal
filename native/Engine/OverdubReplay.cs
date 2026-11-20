@@ -22,15 +22,10 @@ internal sealed class OverdubReplay(
     private long _nextPosition;
     private bool _synthReady;
 
-    public int DroppedNotes { get; private set; }
-
     public void AddNote(RecordedNote note, long completedPass)
     {
         if (_noteCount == _notes.Length)
-        {
-            DroppedNotes++;
             return;
-        }
 
         long start = Math.Clamp(tempo.TickToSample(note.StartTick, sampleRate), loopStartFrame, loopEndFrame - 1);
         long end = Math.Clamp(tempo.TickToSample(note.StartTick + note.LengthTicks, sampleRate),

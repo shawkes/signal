@@ -61,6 +61,9 @@ internal sealed class Recording(TempoMap tempoMap, int sampleRate)
 
     public void Stop(long frame)
     {
+        if (_loop is { } loop)
+            _loop = loop with { NoteReady = null };
+
         FinishAll(frame);
         _takeId = 0;
         _loop = null;
@@ -151,55 +154,78 @@ internal sealed class Recording(TempoMap tempoMap, int sampleRate)
 
     private void FinishLooped(int key, HeldNote held, long lengthFrames, LoopCapture loop)
     {
-        long firstPhase = (held.ReceivedFrame - _songOriginFrame.GetValueOrDefault()) % loop.FrameCount;
-        long firstLength = Math.Min(lengthFrames, loop.FrameCount - firstPhase);
-        long finalCoveredFrame = held.ReceivedFrame + Math.Max(0, lengthFrames - 1);
-        long completedPass = (finalCoveredFrame - _songOriginFrame.GetValueOrDefault()) / loop.FrameCount;
+        long capturedAttack = held.ReceivedFrame - _songOriginFrame.GetValueOrDefault();
+        long capturedRelease = capturedAttack + lengthFrames;
+        long completedPass = (capturedAttack + Math.Max(0, lengthFrames - 1)) / loop.FrameCount;
+        long attackPhase = capturedAttack % loop.FrameCount;
+        long sourceAttack = loop.StartFrame + attackPhase;
+        long rawAttackTick = LoopTick(sourceAttack, loop);
+        long rawReleaseTick = LoopTick(loop.StartFrame + capturedRelease % loop.FrameCount, loop);
+        long passes = capturedRelease / loop.FrameCount - capturedAttack / loop.FrameCount;
+        Int128 duration = (Int128)passes * loop.TickCount + rawReleaseTick - rawAttackTick;
+        duration = Int128.Max(1, duration);
 
-        var first = LoopNote(key, held, firstPhase, firstLength, loop, continuation: false);
+        double compensatedTick = _takeTempoMap.SampleToTick(sourceAttack - _offsetFrames, sampleRate);
+        long attackTick = Math.Max(loop.Range.StartTick, RoundTick(QuantizeStartTick(compensatedTick)));
+        // The exclusive end is also the next pass's downbeat. A snapped attack there belongs at the start.
+        if (attackTick >= loop.Range.EndTick)
+            attackTick = loop.Range.StartTick;
+        long firstLength = (long)Int128.Min(duration, loop.Range.EndTick - attackTick);
+        var first = Segment(attackTick, firstLength, 0);
         PublishNote(first, loop.NoteReady, completedPass);
-        long remaining = lengthFrames - firstLength;
-        if (remaining == 0)
-            return;
 
-        var continuation = held with { ReceivedFrame = held.ReceivedFrame + firstLength };
+        Int128 consumed = firstLength;
+        Int128 remaining = duration - consumed;
         SongNote? wholeLoop = null;
-        if (remaining >= loop.FrameCount)
+        if (remaining >= loop.TickCount)
         {
             // Consecutive full-cycle segments occupy the same edited notes on the song timeline.
             // Emit one regardless of the number of passes for which the key was held.
-            var whole = LoopNote(key, continuation, 0, loop.FrameCount, loop, continuation: true);
+            var whole = Segment(loop.Range.StartTick, loop.TickCount, consumed);
             wholeLoop = whole.ToSongNote();
             if (wholeLoop != first.ToSongNote())
                 PublishNote(whole, loop.NoteReady, completedPass);
 
-            long finalLength = remaining % loop.FrameCount;
-            continuation = continuation with { ReceivedFrame = continuation.ReceivedFrame + remaining - finalLength };
-            remaining = finalLength;
+            remaining %= loop.TickCount;
+            consumed = duration - remaining;
         }
 
         if (remaining > 0)
         {
-            var last = LoopNote(key, continuation, 0, remaining, loop, continuation: true);
+            var last = Segment(loop.Range.StartTick, (long)remaining, consumed);
             var lastNote = last.ToSongNote();
             if (lastNote != first.ToSongNote() && lastNote != wholeLoop)
                 PublishNote(last, loop.NoteReady, completedPass);
         }
+
+        RecordedNote Segment(long start, long length, Int128 precedingTicks)
+        {
+            // Split the measured input interval as well as the edited interval, so diagnostics
+            // keep reporting the played durations even when quantization moves the split point.
+            long firstFrame = precedingTicks == 0 ? 0 : FrameAt(precedingTicks);
+            Int128 endingTicks = precedingTicks + length;
+            long lastFrame = endingTicks == duration ? lengthFrames : FrameAt(endingTicks);
+            return LoopNote(key, held with { ReceivedFrame = held.ReceivedFrame + firstFrame },
+                start, length, lastFrame - firstFrame,
+                precedingTicks == 0 ? sourceAttack : loop.StartFrame, precedingTicks == 0 ? _offsetFrames : 0);
+        }
+
+        long FrameAt(Int128 elapsedTicks)
+        {
+            Int128 ticks = elapsedTicks + (rawAttackTick - loop.Range.StartTick);
+            long tick = loop.Range.StartTick + (long)(ticks % loop.TickCount);
+            long source = tick == loop.Range.StartTick ? loop.StartFrame : _takeTempoMap.TickToSample(tick, sampleRate);
+            Int128 elapsed = ticks / loop.TickCount * loop.FrameCount + source - sourceAttack;
+            return (long)Int128.Clamp(elapsed, 0, lengthFrames);
+        }
     }
 
-    private RecordedNote LoopNote(int key, HeldNote held, long phase, long lengthFrames,
-        LoopCapture loop, bool continuation)
+    private RecordedNote LoopNote(int key, HeldNote held, long startTick, long lengthTicks,
+        long lengthFrames, long sourceReceipt, long offset)
     {
-        long sourceReceipt = loop.StartFrame + phase;
-        long offset = continuation ? 0 : _offsetFrames;
         long compensatedStart = sourceReceipt - offset;
-        double placedTick = _takeTempoMap.SampleToTick(compensatedStart, sampleRate);
-        long startTick = continuation ? loop.Range.StartTick :
-            Math.Clamp(RoundTick(QuantizeStartTick(placedTick)), loop.Range.StartTick, loop.Range.EndTick - 1);
-        long rawStart = LoopTick(sourceReceipt, loop);
-        long rawEnd = LoopTick(sourceReceipt + lengthFrames, loop);
-        long lengthTicks = Math.Clamp(rawEnd - rawStart, 1, loop.Range.EndTick - startTick);
-        var (beat, beatFrame) = NearestBeat(compensatedStart, placedTick, clampToSong: true);
+        var (beat, beatFrame) = NearestBeat(compensatedStart,
+            _takeTempoMap.SampleToTick(compensatedStart, sampleRate), clampToSong: true);
         return new RecordedNote(
             _takeId, startTick, lengthTicks,
             (byte)(key / NotesPerChannel), (byte)(key % NotesPerChannel), held.Velocity,
@@ -210,11 +236,9 @@ internal sealed class Recording(TempoMap tempoMap, int sampleRate)
 
     private long LoopTick(long frame, LoopCapture loop)
     {
-        // The loop's rounded PCM boundaries identify the exact song ticks at either edge.
+        // The loop's rounded PCM start identifies the exact starting song tick.
         if (frame == loop.StartFrame)
             return loop.Range.StartTick;
-        if (frame == loop.EndFrame)
-            return loop.Range.EndTick;
 
         return Math.Clamp(RoundTick(_takeTempoMap.SampleToTick(frame, sampleRate)),
             loop.Range.StartTick, loop.Range.EndTick);
@@ -258,6 +282,7 @@ internal sealed class Recording(TempoMap tempoMap, int sampleRate)
     private readonly record struct LoopCapture(LoopRange Range, long StartFrame, long EndFrame, OverdubNoteReady? NoteReady)
     {
         public long FrameCount => EndFrame - StartFrame;
+        public long TickCount => Range.EndTick - Range.StartTick;
     }
 
     private readonly record struct HeldNote(long ReceivedFrame, byte Velocity);

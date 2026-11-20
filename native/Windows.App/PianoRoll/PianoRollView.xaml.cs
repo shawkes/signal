@@ -17,7 +17,7 @@ namespace Signal.Native.Windows.App.PianoRoll;
 public sealed partial class PianoRollView : UserControl
 {
     private const int BeatsPerBar = 4;
-    private const int SixteenthsPerBeat = 4;
+    private const int DefaultCellsPerBeat = 4;
     private const int PitchCount = 128;
     private const byte DefaultDrumPitch = 36;
     private const byte DrumLaneCenter = 42;
@@ -45,19 +45,15 @@ public sealed partial class PianoRollView : UserControl
     private PianoRollDocument? _document;
     private Palette _palette = Palette.Dark;
     private int _ticksPerBeat = TempoMap.DefaultTicksPerQuarter;
-    private int _cellsPerBeat = SixteenthsPerBeat;
+    private int _cellsPerBeat = DefaultCellsPerBeat;
     private byte _defaultChannel;
     private long _timelineEnd;
-    private long? _selected;
     private long? _playhead;
     private long _entryTick;
     private byte _entryPitch = 60;
     private (long Tick, byte Pitch, bool Recenter)? _reveal = (0, 60, true);
     private uint? _pointerId;
-    private PianoRollNote? _grabbed;
-    private SongNote? _preview;
     private Point _press;
-    private bool _resizing;
     private bool _editingEnabled = true;
 
     private double CellWidth => BeatWidth / _cellsPerBeat;
@@ -73,7 +69,11 @@ public sealed partial class PianoRollView : UserControl
             RefreshViewport();
             DispatcherQueue.TryEnqueue(DispatcherQueuePriority.Low, ApplyReveal);
         };
-        Unloaded += (_, _) => CancelRulerGesture();
+        Unloaded += (_, _) =>
+        {
+            CancelGesture();
+            CancelRulerGesture();
+        };
         ActualThemeChanged += (_, _) => ApplyPalette();
         ApplyPalette();
         RefreshDocument();
@@ -120,7 +120,7 @@ public sealed partial class PianoRollView : UserControl
         _document = document;
         document.Changed += RefreshDocument;
         _ticksPerBeat = ticksPerQuarter;
-        _cellsPerBeat = Math.Min(ticksPerQuarter, SixteenthsPerBeat);
+        UpdateGrid();
         bool previousDrumMode = ShowsDrumLanes;
         _defaultChannel = defaultChannel;
         if (ShowsDrumLanes != previousDrumMode)
@@ -129,8 +129,7 @@ public sealed partial class PianoRollView : UserControl
             PitchHeader.Text = ShowsDrumLanes ? "Drum" : "Pitch";
             PaintPitchLanes();
         }
-        GridLabel.Text = _cellsPerBeat == SixteenthsPerBeat ? "4-beat ruler  ·  1/16 edit grid" : "4-beat ruler  ·  1-tick edit grid";
-        _selected = null;
+        _selectedIds.Clear();
         var firstNote = document.Notes.Count == 0
             ? new SongNote(0, 0, defaultChannel, ShowsDrumLanes ? DefaultDrumPitch : (byte)60, 96)
             : document.Notes.MinBy(item => item.Note.StartTick).Note;
@@ -186,6 +185,7 @@ public sealed partial class PianoRollView : UserControl
         PitchKeys.Background = _palette.Ruler;
         Cursor.Fill = _rulerCursor.Fill = _palette.Playhead;
         GridLoopShade.Fill = RulerLoopFill.Fill = RulerLoopStart.Fill = RulerLoopEnd.Fill = _palette.Loop;
+        SelectionBox.Fill = SelectionBox.Stroke = _palette.Loop;
         PaintPitchLanes();
         PaintNotes();
         RefreshViewport();
@@ -193,13 +193,8 @@ public sealed partial class PianoRollView : UserControl
 
     private void RefreshDocument()
     {
-        if (_selected is { } id && _document?.Notes.All(item => item.Id != id) is true)
-            _selected = null;
-        if (SelectedNote() is { } selected)
-        {
-            _entryTick = selected.Note.StartTick;
-            _entryPitch = selected.Note.NoteNumber;
-        }
+        if (_document is { } document && _selectedIds.Count != 0)
+            _selectedIds.IntersectWith(document.Notes.Select(item => item.Id));
 
         UpdateSurfaceExtent();
         PaintNotes();
@@ -338,8 +333,11 @@ public sealed partial class PianoRollView : UserControl
             border.Child = body;
             NotesLayer.Children.Add(border);
             _noteViews.Add(item.Id, border);
-            UpdateNoteVisual(item.Id, _grabbed?.Id == item.Id ? _preview ?? item.Note : item.Note);
+            UpdateNoteVisual(item.Id, item.Note);
         }
+
+        foreach (var item in _previewNotes)
+            UpdateNoteVisual(item.Id, item.Note);
     }
 
     private void UpdateNoteVisual(long id, SongNote note)
@@ -347,7 +345,7 @@ public sealed partial class PianoRollView : UserControl
         if (!_noteViews.TryGetValue(id, out var border))
             return;
 
-        bool selected = _selected == id;
+        bool selected = _selectedIds.Contains(id);
         double width = NoteWidth(note);
         border.Width = width;
         border.Background = selected ? _palette.SelectedNote : _palette.Note;

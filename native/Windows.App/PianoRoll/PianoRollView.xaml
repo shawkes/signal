@@ -27,12 +27,16 @@
                     </StackPanel>
                 </Button>
                 <Button x:Name="DeleteButton" Click="DeleteClicked" IsEnabled="False"
-                        ToolTipService.ToolTip="Delete selected note (Delete)" AutomationProperties.Name="Delete note">
+                        ToolTipService.ToolTip="Delete selected notes (Delete)" AutomationProperties.Name="Delete notes">
                     <StackPanel Orientation="Horizontal" Spacing="7">
                         <SymbolIcon Symbol="Delete" />
                         <TextBlock Text="Delete" />
                     </StackPanel>
                 </Button>
+                <Button x:Name="CopyButton" Content="Copy" Click="CopyClicked" IsEnabled="False"
+                        ToolTipService.ToolTip="Copy selected notes (Ctrl+C)" />
+                <Button x:Name="PasteButton" Content="Paste" Click="PasteClicked" IsEnabled="False"
+                        ToolTipService.ToolTip="Paste at the edit position (Ctrl+V). Shift-click an empty cell to set it." />
                 <Button x:Name="UndoButton" Click="UndoClicked" IsEnabled="False"
                         ToolTipService.ToolTip="Undo last edit (Ctrl+Z)" AutomationProperties.Name="Undo">
                     <StackPanel Orientation="Horizontal" Spacing="7">
@@ -94,6 +98,7 @@
                         <Canvas x:Name="NotesLayer" />
                         <Canvas x:Name="TransportLayer" IsHitTestVisible="False">
                             <Rectangle x:Name="Cursor" Width="2" Visibility="Collapsed" />
+                            <Rectangle x:Name="SelectionBox" StrokeThickness="1" Opacity="0.3" Visibility="Collapsed" />
                         </Canvas>
                     </Grid>
                 </ScrollViewer>
@@ -105,11 +110,20 @@
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
-            <TextBlock Text="Click an empty cell to add. Drag a note to move it or its right edge to resize."
-                       TextWrapping="Wrap" Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+            <TextBlock Text="Drag empty space or Ctrl-click notes to select. Arrows move the selection. Shift-click an empty cell to set the paste position."
+                       TextWrapping="Wrap" VerticalAlignment="Center" Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                        Style="{StaticResource CaptionTextBlockStyle}" />
-            <TextBlock x:Name="GridLabel" Grid.Column="1" Text="4-beat ruler  ·  1/16 edit grid"
-                       Style="{StaticResource CaptionTextBlockStyle}" />
+            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" Margin="12,0,0,0">
+                <TextBlock Text="Grid" VerticalAlignment="Center" Style="{StaticResource CaptionTextBlockStyle}" />
+                <ComboBox x:Name="GridSizeBox" SelectedIndex="2" SelectionChanged="GridSizeChanged"
+                          AutomationProperties.Name="Piano-roll edit grid"
+                          ToolTipService.ToolTip="Set the grid for adding, moving, resizing, and nudging notes">
+                    <ComboBoxItem Content="1/4" />
+                    <ComboBoxItem Content="1/8" />
+                    <ComboBoxItem Content="1/16" />
+                    <ComboBoxItem Content="1/32" />
+                </ComboBox>
+            </StackPanel>
         </Grid>
     </Grid>
 </UserControl>
