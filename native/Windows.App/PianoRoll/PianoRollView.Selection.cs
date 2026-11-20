@@ -17,6 +17,8 @@ public sealed partial class PianoRollView
     private bool _resizeDrag;
     private bool _addToSelection;
     private bool _positionOnly;
+    private Point _editPointer;
+    private bool _editDragStarted;
 
     private void RefreshSelection()
     {
@@ -112,6 +114,7 @@ public sealed partial class PianoRollView
 
         _pointerId = args.Pointer.PointerId;
         _press = point.Position;
+        RememberEditPointer(point.Position);
         _addToSelection = control;
         _positionOnly = args.KeyModifiers.HasFlag(VirtualKeyModifiers.Shift);
         if (hit is { } item)
@@ -133,12 +136,22 @@ public sealed partial class PianoRollView
     {
         if (_pointerId != args.Pointer.PointerId)
             return;
-        PreviewGesture(args.GetCurrentPoint(Surface).Position);
+        var point = args.GetCurrentPoint(Surface).Position;
+        RememberEditPointer(point);
+        PreviewGesture(point);
+        UpdateDragScroll();
         args.Handled = true;
     }
 
+    private void RememberEditPointer(Point point) => _editPointer = new(
+        point.X - EditorScroll.HorizontalOffset, point.Y - EditorScroll.VerticalOffset);
+
+    private Point EditPointerOnSurface() => new(
+        _editPointer.X + EditorScroll.HorizontalOffset, _editPointer.Y + EditorScroll.VerticalOffset);
+
     private void PreviewGesture(Point point)
     {
+        _editDragStarted |= Math.Abs(point.X - _press.X) >= 6 || Math.Abs(point.Y - _press.Y) >= 6;
         if (_grabbedNote is { } grabbed)
         {
             long cells = (long)Math.Round((point.X - _press.X) / CellWidth, MidpointRounding.AwayFromZero);
@@ -150,9 +163,8 @@ public sealed partial class PianoRollView
             return;
         }
 
-        bool isDrag = Math.Abs(point.X - _press.X) >= 6 || Math.Abs(point.Y - _press.Y) >= 6;
-        SelectionBox.Visibility = isDrag ? Visibility.Visible : Visibility.Collapsed;
-        if (!isDrag)
+        SelectionBox.Visibility = _editDragStarted ? Visibility.Visible : Visibility.Collapsed;
+        if (!_editDragStarted)
             return;
 
         var box = SelectionBounds(point);
@@ -233,9 +245,12 @@ public sealed partial class PianoRollView
 
     private void CancelGesture()
     {
+        if (_pointerId is not null)
+            _dragScrollTimer?.Stop();
         foreach (var item in _dragNotes)
             UpdateNoteVisual(item.Id, item.Note);
         _pointerId = null;
+        _editDragStarted = false;
         _grabbedNote = null;
         _dragNotes = [];
         _previewNotes = [];

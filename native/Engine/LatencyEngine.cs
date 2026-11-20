@@ -119,7 +119,7 @@ public sealed class LatencyEngine
         RequestPlayback(_playback.Prepare(notes, [], TempoMap, playbackSynth));
 
     /// <summary>Plays all tracks together on their own tempo map, without changing the recording clock.</summary>
-    public bool PlaySong(Song song, IMonitorSynth playbackSynth, LoopRange? loop = null)
+    public bool PlaySong(Song song, IMonitorSynth playbackSynth, LoopRange? loop = null, long startTick = 0)
     {
         ArgumentNullException.ThrowIfNull(song);
         if (Volatile.Read(ref _songTake) is not null)
@@ -128,7 +128,7 @@ public sealed class LatencyEngine
         return RequestPlayback(_playback.Prepare(
             song.Tracks.SelectMany(track => track.Notes),
             song.Tracks.SelectMany(track => track.PlaybackMessages),
-            song.TempoMap, playbackSynth, SongEndTick(song), loop, song.MeterMap));
+            song.TempoMap, playbackSynth, SongEndTick(song), loop, song.MeterMap, startTick: startTick));
     }
 
     /// <summary>Records from bar one or the selected loop, optionally counting in once.</summary>

@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Runtime.InteropServices;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.Windows.Storage.Pickers;
@@ -57,6 +58,7 @@ public sealed partial class MainWindow : Window
         AppWindow.Resize(new SizeInt32(1200, 780));
         TakeList.ItemsSource = _rows;
         RollView.LoopRangeSelected += LoopRangeSelected;
+        RollView.PlayheadPositionSelected += SeekPlayhead;
         RollView.TempoMarkerEdited += EditTempoMarker;
         RollView.TempoMarkerMoved += MoveTempoMarker;
         RollView.TempoUndoRequested += UndoTempoMarkerEdit;
@@ -228,11 +230,21 @@ public sealed partial class MainWindow : Window
 
     private void ApplyRecordingOffset(double offset)
     {
-        OffsetBox.Value = offset;
-        if (TrySavePreference(() => _preferences.SaveOffset(offset)))
-            _savedRecordingOffset = offset;
+        if (OffsetBox.Value != offset)
+        {
+            OffsetBox.Value = offset;
+            return;
+        }
+        SaveRecordingOffset(offset);
         UpdatePlacementOffsetAction();
         UpdateCalibrationControls();
+    }
+
+    private void SaveRecordingOffset(double offset)
+    {
+        if (offset is >= -500 and <= 500 && _savedRecordingOffset != offset &&
+            TrySavePreference(() => _preferences.SaveOffset(offset)))
+            _savedRecordingOffset = offset;
     }
 
     private bool TrySavePreference(Action save)
@@ -398,16 +410,34 @@ public sealed partial class MainWindow : Window
 
     private void PlayClicked(object sender, RoutedEventArgs args)
     {
-        if (_engine is not { } engine || _bank is null)
+        if (_engine is not { } engine || _bank is null || CaptureInProgress || _fileBusy)
             return;
 
+        if (engine.PlaybackTick is { } tick)
+        {
+            _pausedTick = tick;
+            engine.StopPlayback();
+            UpdatePlayhead();
+            return;
+        }
+
+        StartSongPlayback(engine, _pausedTick ?? _cueTick);
+    }
+
+    private void StartSongPlayback(LatencyEngine engine, long tick, bool seek = false)
+    {
         try
         {
-            var loop = EnabledLoopRange(_loopRange, _loopEnabled, _songEndTick);
-            if (!engine.PlaySong(SnapshotSong(), new SoundFontPiano(_bank, engine.SampleRate, generalMidi: true), loop))
+            var song = seek && _playingSong is not null ? _playingSong : SnapshotSong();
+            long endTick = seek ? _playingSongEndTick : _songEndTick;
+            var loop = EnabledLoopRange(_loopRange, _loopEnabled, endTick);
+            long start = seek ? Math.Min(tick, Math.Max(0, endTick - 1)) : tick < endTick ? tick : 0;
+            if (!engine.PlaySong(song, new SoundFontPiano(_bank!, engine.SampleRate, generalMidi: true), loop, start))
                 return;
 
-            _playingSongEndTick = _songEndTick;
+            _pausedTick = null;
+            _playingSong = song;
+            _playingSongEndTick = endTick;
             _playbackError = null;
             UpdatePlayhead();
             WatchTransportFrames(true);
@@ -416,6 +446,26 @@ public sealed partial class MainWindow : Window
         {
             _playbackError = error.Message;
             UpdatePlaybackControls();
+        }
+    }
+
+    private long _cueTick;
+    private long? _pausedTick;
+    private Song? _playingSong;
+
+    private void SeekPlayhead(long tick)
+    {
+        if (CaptureInProgress || _fileBusy)
+            return;
+
+        _cueTick = Math.Min(tick, _songEndTick);
+        if (_engine is { PlaybackTick: not null } engine && _bank is not null)
+            StartSongPlayback(engine, _cueTick, seek: true);
+        else
+        {
+            if (_pausedTick.HasValue)
+                _pausedTick = _cueTick;
+            UpdatePlayhead();
         }
     }
 
@@ -429,8 +479,12 @@ public sealed partial class MainWindow : Window
 
     private void StopSongPlayback()
     {
+        _pausedTick = null;
+        _playingSong = null;
         _engine?.StopPlayback();
         UpdatePlayhead();
+        if (_trackEditor is not null)
+            UpdatePlaybackControls();
     }
 
     private void WatchTransportFrames(bool enabled)
@@ -471,7 +525,7 @@ public sealed partial class MainWindow : Window
         {
             tick = _audioFailed ? null : _engine?.PlaybackTick;
         }
-        RollView.SetPlayhead(tick);
+        RollView.SetPlayhead(SongCaptureInProgress ? tick : tick ?? _pausedTick ?? _cueTick);
         if (_trackEditor is not null)
             UpdateMeterButton(tick);
         if (tick is null && !SongCaptureInProgress)
@@ -641,19 +695,24 @@ public sealed partial class MainWindow : Window
     {
         bool audioReady = _output is { SampleRate: >= 16000 and <= 192000 } && !_audioFailed;
         bool takeInProgress = CaptureInProgress;
-        PlayButton.IsEnabled = audioReady && _bank is not null && !_playing && !takeInProgress && !_fileBusy
-            && _trackEditor.Tracks.Any(track => track.Document.Notes.Count > 0);
+        bool playingSong = _playing && !takeInProgress;
+        PlayIcon.Symbol = playingSong ? Symbol.Pause : Symbol.Play;
+        PlayLabel.Text = playingSong ? "Pause" : _pausedTick.HasValue ? "Resume" : "Play song";
+        AutomationProperties.SetName(PlayButton, PlayLabel.Text);
+        ToolTipService.SetToolTip(PlayButton, playingSong ? "Pause at the current playhead" : "Play all tracks from the playhead");
+        PlayButton.IsEnabled = audioReady && _bank is not null && !takeInProgress && !_fileBusy &&
+            (playingSong || _trackEditor.Tracks.Any(track => track.Document.Notes.Count > 0));
         SongRecordButton.IsEnabled = audioReady && _bank is not null && _selectedTrack is not null &&
             !_loadingBank && !_playing && !takeInProgress && !_fileBusy;
         CountInBox.IsEnabled = !takeInProgress && !_fileBusy;
-        StopButton.IsEnabled = audioReady && (_playing || (SongCaptureInProgress && _recording)) && !_finishingTake;
+        StopButton.IsEnabled = audioReady && (_playing || _pausedTick.HasValue || (SongCaptureInProgress && _recording)) && !_finishingTake;
         LoopButton.IsEnabled = !_fileBusy && !takeInProgress;
         ClearLoopRangeButton.IsEnabled = !_fileBusy && !takeInProgress;
         RollView.SetLoopRangeEditable(!takeInProgress);
         string status = _playbackError ?? (_finishingTake ? "Finishing take…" :
             _countInRemaining is { } beat ? $"Count-in {beat}" :
             SongCaptureInProgress ? SongCaptureStatus :
-            _playing ? "Playing song" :
+            _playing ? "Playing song" : _pausedTick.HasValue ? "Paused" :
             CalibrationInProgress ? "Tap test in progress" :
             takeInProgress ? "Recording a test take" :
             !audioReady ? "Check the audio output in Recording settings" :

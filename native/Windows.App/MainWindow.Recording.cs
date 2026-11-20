@@ -222,6 +222,7 @@ public sealed partial class MainWindow
     {
         if (_trackEditor is not null)
         {
+            SaveRecordingOffset(args.NewValue);
             UpdatePlacementOffsetAction();
             UpdateCalibrationControls();
         }

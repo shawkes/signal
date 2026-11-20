@@ -8,7 +8,18 @@ public readonly record struct HeldRecordingNote(byte Channel, byte NoteNumber, i
 
 internal readonly record struct RecordingPlacement(TempoMap Tempo, int SampleRate, long OffsetFrames, int Division)
 {
+    private const int UnquantizedPickupMilliseconds = 25;
     private readonly double _gridTicks = Division == 0 ? 0 : Math.Max(1, 4.0 * Tempo.TicksPerQuarter / Division);
+
+    public long EarliestDownbeatReceipt(long downbeatFrame, long startTick)
+    {
+        // A hit up to half a grid cell early still snaps to the downbeat.
+        long earlyFrames = Division == 0
+            ? (long)SampleRate * UnquantizedPickupMilliseconds / 1000
+            : (long)Math.Floor(Math.BitIncrement(_gridTicks * 0.5 * Tempo.SecondsPerTickAt(startTick) * SampleRate));
+        // Always accept attacks on or after the downbeat, whatever the compensation setting.
+        return long.CreateSaturating(Int128.Min(downbeatFrame, (Int128)downbeatFrame + OffsetFrames - earlyFrames));
+    }
 
     public long TickAt(long frame) =>
         (long)Math.Round(Tempo.SampleToTick(frame, SampleRate), MidpointRounding.AwayFromZero);
@@ -18,7 +29,7 @@ internal readonly record struct RecordingPlacement(TempoMap Tempo, int SampleRat
     public long SnapTick(double tick)
     {
         if (_gridTicks > 0)
-            tick = Math.Round(tick / _gridTicks, MidpointRounding.AwayFromZero) * _gridTicks;
+            tick = Math.Floor(tick / _gridTicks + 0.5) * _gridTicks;
         long start = (long)Math.Round(tick, MidpointRounding.AwayFromZero);
         return Math.Max(0, start);
     }

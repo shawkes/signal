@@ -35,10 +35,11 @@ internal sealed class NotePlayback(int sampleRate, MeterMap liveMeter)
 
     public PlaybackPlan? Prepare(IEnumerable<SongNote> notes, IEnumerable<SongChannelMessage> messages,
         TempoMap tempo, IMonitorSynth synth, long endTick = 0, LoopRange? loop = null, MeterMap? meterMap = null,
-        bool allowEmpty = false)
+        bool allowEmpty = false, long startTick = 0)
     {
         ArgumentNullException.ThrowIfNull(notes);
         ArgumentNullException.ThrowIfNull(synth);
+        ArgumentOutOfRangeException.ThrowIfNegative(startTick);
         ValidateRange(loop);
         var events = new List<PlaybackEvent>();
         foreach (var note in notes)
@@ -87,6 +88,14 @@ internal sealed class NotePlayback(int sampleRate, MeterMap liveMeter)
             plan.RequestedLoop = PrepareLoop(plan, range);
             plan.Tick = range.StartTick;
         }
+        long position = tempo.TickToSample(startTick, sampleRate);
+        if (plan.RequestedLoop is { } cycle
+            ? position > cycle.StartFrame && position < cycle.EndFrame
+            : position > 0 && position < endFrame)
+        {
+            plan.Seek = new PlaybackSeek(position, PrepareSeekChase(plan.Events, position));
+            plan.Tick = startTick;
+        }
         return plan;
     }
 
@@ -130,6 +139,14 @@ internal sealed class NotePlayback(int sampleRate, MeterMap liveMeter)
             _startFrame = requested?.OriginFrame ?? firstFrame;
             _firstAllowedOnset = 0;
             _nextEvent = 0;
+            if (requested?.Seek is { } seek)
+            {
+                foreach (var message in seek.Chase)
+                    requested.Synth.ProcessMidi(message.Status, message.Data1, message.Data2);
+                _startFrame = firstFrame - seek.Frame;
+                _firstAllowedOnset = seek.Frame;
+                _nextEvent = FirstAtOrAfter(requested.Events, seek.Frame);
+            }
         }
 
         if (_fadingSynth is { } fading)
@@ -170,7 +187,8 @@ internal sealed class NotePlayback(int sampleRate, MeterMap liveMeter)
             // Recording and playback must keep the same cycle phase if the endpoint skips frames.
             SeekLoop(active, anchoredLoop, firstFrame, anchoredLoop.PositionAt(firstFrame - origin));
         }
-        else if (next is { } loop && (restarting || position < loop.StartFrame || position >= loop.EndFrame))
+        else if (next is { } loop &&
+            ((restarting && active.Seek is null) || position < loop.StartFrame || position >= loop.EndFrame))
         {
             SeekLoop(active, loop, firstFrame, loop.StartFrame);
         }
@@ -317,19 +335,43 @@ internal sealed class NotePlayback(int sampleRate, MeterMap liveMeter)
             if (message.Tick != range.StartTick)
                 continue;
 
-            int channelStart = (message.Status & 0x0f) * Keys;
-            if (message.Command == 0x80)
-                held[channelStart + message.Data1] = null;
-            else if (message.Command == 0xb0 && message.Data1 is 120 or 123)
-                Array.Clear(held, channelStart, Keys);
+            ClearHeldAtBoundary(message, held);
         }
 
-        var chased = setup.Values.OrderBy(message => message.Frame).ThenBy(message => message.Tick)
+        return new PlaybackLoop(range, start, end, events.ToArray(), OrderChase(setup, held));
+    }
+
+    private static PlaybackEvent[] PrepareSeekChase(PlaybackEvent[] events, long frame)
+    {
+        var held = new PlaybackEvent?[Channels * Keys];
+        var setup = new Dictionary<(byte Status, byte Key), PlaybackEvent>();
+        foreach (var message in events)
+        {
+            if (message.Frame > frame)
+                break;
+            if (message.Frame < frame)
+                ChaseBeforeStart(message, setup, held);
+            else
+                ClearHeldAtBoundary(message, held);
+        }
+        return OrderChase(setup, held);
+    }
+
+    private static void ClearHeldAtBoundary(PlaybackEvent message, PlaybackEvent?[] held)
+    {
+        int channelStart = (message.Status & 0x0f) * Keys;
+        if (message.Command == 0x80)
+            held[channelStart + message.Data1] = null;
+        else if (message.Command == 0xb0 && message.Data1 is 120 or 123)
+            Array.Clear(held, channelStart, Keys);
+    }
+
+    private static PlaybackEvent[] OrderChase(Dictionary<(byte Status, byte Key), PlaybackEvent> setup,
+        PlaybackEvent?[] held) =>
+        setup.Values.OrderBy(message => message.Frame).ThenBy(message => message.Tick)
             .ThenBy(message => message.Order)
             .Concat(held.Where(message => message.HasValue).Select(message => message.GetValueOrDefault()))
             .ToArray();
-        return new PlaybackLoop(range, start, end, events.ToArray(), chased);
-    }
 
     private static void ChaseBeforeStart(PlaybackEvent message,
         Dictionary<(byte Status, byte Key), PlaybackEvent> setup, PlaybackEvent?[] held)
@@ -404,10 +446,13 @@ internal sealed class NotePlayback(int sampleRate, MeterMap liveMeter)
         public long EndFrame { get; } = endFrame;
         public long EndWithRelease { get; } = endWithRelease;
         public PlaybackLoop? RequestedLoop;
+        public PlaybackSeek? Seek;
         public OverdubReplay? Overdub;
         public long? OriginFrame;
         public long Tick;
     }
+
+    internal sealed record PlaybackSeek(long Frame, PlaybackEvent[] Chase);
 
     internal sealed record PlaybackLoop(LoopRange Range, long StartFrame, long EndFrame,
         PlaybackEvent[] Events, PlaybackEvent[] Chase)

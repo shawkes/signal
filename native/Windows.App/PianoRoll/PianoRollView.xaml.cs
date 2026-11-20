@@ -130,6 +130,7 @@ public sealed partial class PianoRollView : UserControl
             _document.Changed -= RefreshDocument;
         _document = document;
         document.Changed += RefreshDocument;
+        _editExtentTick = 0;
         if (_recordingDocument is null)
             _takeExtentTick = 0;
         UpdateRecordingLayerVisibility();
@@ -236,6 +237,7 @@ public sealed partial class PianoRollView : UserControl
         long trackEnd = _document?.Notes.Select(item => item.Note.StartTick + item.Note.LengthTicks).DefaultIfEmpty().Max() ?? 0;
         long lastTick = Math.Max(Math.Max(_timelineEnd, trackEnd), _loopRange?.EndTick ?? 0);
         lastTick = Math.Max(lastTick, _takeExtentTick);
+        lastTick = Math.Max(lastTick, _editExtentTick);
         lastTick = Math.Max(lastTick, _tempoMap?.Changes[^1].Tick ?? 0);
         lastTick = Math.Max(lastTick, _meterMap.Changes[^1].Tick);
         long endTick = _meterMap.NextBarTick(_meterMap.NextBarTick(lastTick));
@@ -438,6 +440,8 @@ public sealed partial class PianoRollView : UserControl
     private void EditorViewChanged(object sender, ScrollViewerViewChangedEventArgs args)
     {
         RefreshViewport();
+        if (_pointerId is not null)
+            PreviewGesture(EditPointerOnSurface());
         if (_rulerPointerId is not null)
             PreviewLoopDrag(_rulerPointerX);
         if (_reveal is not null)

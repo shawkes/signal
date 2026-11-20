@@ -24,6 +24,7 @@ public sealed partial class MainWindow
     private void ReplaceSong(Song song, MidiFileDocument? source = null, string? path = null)
     {
         var editor = new SongTrackEditor(song, imported: source is not null);
+        _cueTick = 0;
         StopSongPlayback();
         if (_trackEditor is not null)
         {

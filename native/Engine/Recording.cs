@@ -52,9 +52,9 @@ internal sealed class Recording(TempoMap tempoMap, int sampleRate)
         HeldRecordingNotes preview, OverdubNoteReady? noteReady)
     {
         StartTake(firstSongFrame, takeId, preview.Placement, preview, noteReady);
-        long lead = Math.Min(0, _placement.OffsetFrames);
         _firstAcceptedFrame = countIn
-            ? Math.Max(armedFrame, long.CreateSaturating((Int128)firstSongFrame + lead)) : armedFrame;
+            ? Math.Max(armedFrame, _placement.EarliestDownbeatReceipt(firstSongFrame, preview.Loop?.Range.StartTick ?? 0))
+            : armedFrame;
         _pendingDownbeat = countIn && _firstAcceptedFrame < firstSongFrame;
     }
 

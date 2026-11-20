@@ -43,6 +43,43 @@ public sealed class NotePlaybackTests
     }
 
     [Fact]
+    public void StartsMidSongWithItsProgramsHeldNotesAndTempoInEffect()
+    {
+        var engine = Create();
+        engine.MetronomeEnabled = true;
+        var synth = new EventSynth();
+        var tempo = new TempoMap(480, [new(0, 500_000), new(480, 1_000_000)]);
+        var song = new Song(tempo, [new SongTrack("Piano",
+            [new(0, 240, 0, 59, 100), new(240, 1440, 0, 60, 95), new(480, 240, 0, 62, 100)],
+            [new(0, 0xc0, 16, 0), new(480, 0xb0, 11, 100)])]);
+
+        Assert.True(engine.PlaySong(song, synth, startTick: 720));
+        Assert.Equal(720, engine.PlaybackTick);
+        var output = Render(engine, Origin, 24_001);
+
+        Assert.Equal(0, output[0]); // Halfway between beats at the new tempo.
+        Assert.Equal(0.16f, output[48_000]);
+        Assert.Equal(
+            [new ReceivedMessage(0, 0xc0, 16, 0), new(0, 0xb0, 11, 100),
+                new(0, 0x90, 60, 95), new(0, 0x80, 62, 0)],
+            synth.Messages);
+    }
+
+    [Fact]
+    public void PlayingFromInsideALoopUsesTheRemainingRangeBeforeWrapping()
+    {
+        var engine = Create();
+        engine.MetronomeEnabled = true;
+        var song = new Song(engine.TempoMap, [new SongTrack("Piano", [new(0, 1920, 0, 60, 95)])]);
+        Assert.True(engine.PlaySong(song, SilentMonitorSynth.Instance, new LoopRange(480, 1440), startTick: 1200));
+        Assert.Equal(1200, engine.PlaybackTick);
+        var output = Render(engine, Origin, 12_001);
+        Assert.Equal(0, output[0]);
+        Assert.Equal(0.16f, output[24_000]);
+        Assert.Equal(480, engine.PlaybackTick);
+    }
+
+    [Fact]
     public void TransportMetronomeStaysSilentWhenIdleAndAfterPlaybackEnds()
     {
         var engine = Create();

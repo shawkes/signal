@@ -17,10 +17,12 @@ public sealed class SongRecordingTests
         long take = engine.RecordSong(song, SilentMonitorSynth.Instance, countIn: true,
             offsetMilliseconds: 10, timestamp: Timestamp(FirstFrame));
         long songStart = FirstFrame + 2 * SampleRate;
-        EnqueueNote(engine, 55, songStart - 1, songStart + 480);
+        EnqueueNote(engine, 55, songStart - 721, songStart + 480); // Just outside the 25 ms pickup allowance after compensation.
         EnqueueNote(engine, 60, songStart + 240, songStart + 5_040);
 
         RenderThrough(engine, songStart + 5_040);
+        // The first render queued bar one in advance. The next callback reaches its presentation time.
+        engine.Render(new float[2], songStart + 5_041, new(Timestamp(FirstFrame), FirstFrame));
 
         Assert.True(engine.TryReadNote(out var note));
         Assert.Equal(take, note.TakeId);

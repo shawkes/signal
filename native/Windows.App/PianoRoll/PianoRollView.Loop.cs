@@ -1,4 +1,3 @@
-using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
@@ -11,8 +10,6 @@ public sealed partial class PianoRollView
 {
     private const double RulerHandleHitWidth = 7;
     private const double RulerMarkerWidth = 5;
-    private const double RulerScrollMargin = 28;
-    private const double RulerScrollStep = 18;
 
     private LoopRange? _loopRange;
     private LoopRange? _loopPreview;
@@ -24,9 +21,9 @@ public sealed partial class PianoRollView
     private double _rulerPointerX;
     private long _rulerAnchorTick;
     private RulerDrag _rulerDrag;
-    private DispatcherQueueTimer? _rulerScrollTimer;
 
     public event Action<LoopRange>? LoopRangeSelected;
+    public event Action<long>? PlayheadPositionSelected;
 
     public void SetLoopRangeEditable(bool editable)
     {
@@ -92,10 +89,7 @@ public sealed partial class PianoRollView
             return;
 
         PreviewLoopDrag(args.GetCurrentPoint(RulerInput).Position.X);
-        if (_loopPreview is not null && RulerScrollDirection() != 0)
-            StartRulerScroll();
-        else
-            _rulerScrollTimer?.Stop();
+        UpdateDragScroll();
 
         args.Handled = true;
     }
@@ -112,6 +106,8 @@ public sealed partial class PianoRollView
         args.Handled = true;
         if (selected is { } range)
             LoopRangeSelected?.Invoke(range);
+        else
+            PlayheadPositionSelected?.Invoke(TickOfCell(CellNearestTick(long.CreateSaturating(Math.Round(RulerTickAt(_rulerPointerX))))));
     }
 
     private void RulerPointerCanceled(object sender, PointerRoutedEventArgs args)
@@ -122,8 +118,9 @@ public sealed partial class PianoRollView
 
     private void CancelRulerGesture()
     {
+        if (_rulerPointerId is not null)
+            _dragScrollTimer?.Stop();
         _rulerPointerId = null;
-        _rulerScrollTimer?.Stop();
         if (_loopPreview is null)
             return;
 
@@ -158,12 +155,17 @@ public sealed partial class PianoRollView
 
     private long SnapRulerTick(double x)
     {
-        double contentX = EditorScroll.HorizontalOffset + Math.Clamp(x, 0, EditorScroll.ViewportWidth);
-        double rawTick = Math.Min(contentX, Surface.Width) / BeatWidth * _ticksPerBeat;
+        double rawTick = RulerTickAt(x);
         long tick = long.CreateSaturating(Math.Floor(rawTick));
         long before = _meterMap.PositionAt(tick).BeatTick;
         long after = _meterMap.NextBeatTick(tick);
         return rawTick - before < after - rawTick ? before : after;
+    }
+
+    private double RulerTickAt(double x)
+    {
+        double contentX = EditorScroll.HorizontalOffset + Math.Clamp(x, 0, EditorScroll.ViewportWidth);
+        return Math.Min(contentX, Surface.Width) / BeatWidth * _ticksPerBeat;
     }
 
     private long PreviousBeat(long tick) => _meterMap.PositionAt(Math.Max(0, tick - 1)).BeatTick;
@@ -173,37 +175,6 @@ public sealed partial class PianoRollView
     {
         double x = TickX(tick) - EditorScroll.HorizontalOffset;
         return x >= 0 && x <= EditorScroll.ViewportWidth && Math.Abs(pointerX - x) <= RulerHandleHitWidth;
-    }
-
-    private int RulerScrollDirection()
-    {
-        double margin = Math.Min(RulerScrollMargin, EditorScroll.ViewportWidth / 3);
-        if (_rulerPointerX < margin && EditorScroll.HorizontalOffset > 0)
-            return -1;
-        if (_rulerPointerX > EditorScroll.ViewportWidth - margin && EditorScroll.HorizontalOffset < EditorScroll.ScrollableWidth)
-            return 1;
-        return 0;
-    }
-
-    private void StartRulerScroll()
-    {
-        if (_rulerScrollTimer is null)
-        {
-            _rulerScrollTimer = DispatcherQueue.CreateTimer();
-            _rulerScrollTimer.Interval = TimeSpan.FromMilliseconds(30);
-            _rulerScrollTimer.Tick += ScrollRuler;
-        }
-        if (!_rulerScrollTimer.IsRunning)
-            _rulerScrollTimer.Start();
-    }
-
-    private void ScrollRuler(DispatcherQueueTimer timer, object args)
-    {
-        int direction = RulerScrollDirection();
-        if (_rulerPointerId is null || direction == 0 ||
-            !EditorScroll.ChangeView(Math.Clamp(EditorScroll.HorizontalOffset + direction * RulerScrollStep,
-                0, EditorScroll.ScrollableWidth), null, null, true))
-            timer.Stop();
     }
 
     private void RefreshLoopRangeVisuals()
