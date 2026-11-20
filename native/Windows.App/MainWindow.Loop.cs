@@ -18,6 +18,9 @@ public sealed partial class MainWindow
 
     private void ChangeLoop(LoopRange? range, bool enabled)
     {
+        if (CaptureInProgress)
+            return;
+
         try
         {
             if (_engine?.PlaybackTick is not null)
@@ -41,13 +44,16 @@ public sealed partial class MainWindow
 
     private void UpdateLoopDisplay()
     {
-        var range = _loopRange ?? EnabledLoopRange(null, _loopEnabled, _playing ? _playingSongEndTick : _songEndTick);
-        if (SongCaptureInProgress)
-            range = _loopRange;
-        RollView.SetLoopRange(range, _loopEnabled && !SongCaptureInProgress, showHandles: _loopRange is not null);
+        bool songTake = SongCaptureInProgress;
+        var range = songTake ? _recordingLoop ?? _loopRange :
+            _loopRange ?? EnabledLoopRange(null, _loopEnabled, _playing ? _playingSongEndTick : _songEndTick);
+        RollView.SetLoopRange(range, songTake ? _recordingLoop is not null : _loopEnabled,
+            showHandles: _loopRange is not null && !CaptureInProgress);
         LoopButton.IsChecked = _loopEnabled;
         ClearLoopRangeButton.Visibility = _loopRange is null ? Visibility.Collapsed : Visibility.Visible;
-        LoopRangeText.Text = SongCaptureInProgress ? "Recording from bar 1" : _loopRange is { } selected
+        LoopRangeText.Text = songTake
+            ? _recordingLoop is { } loop ? $"Loop {BeatLabel(loop.StartTick)}–{BeatLabel(loop.EndTick)}" : "Recording from bar 1"
+            : _loopRange is { } selected
             ? $"Range {BeatLabel(selected.StartTick)}–{BeatLabel(selected.EndTick)}"
             : _loopEnabled ? "Repeating the whole song" : "Drag the ruler to set a loop range";
     }

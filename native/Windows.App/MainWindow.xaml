@@ -52,7 +52,7 @@
                             </StackPanel>
                         </Button>
                         <Button x:Name="SongRecordButton" Content="Record" Click="SongRecordClicked"
-                                IsEnabled="False" ToolTipService.ToolTip="Record into the selected track from bar 1" />
+                                IsEnabled="False" ToolTipService.ToolTip="Record into the selected track. Turn on Loop to overdub." />
                         <CheckBox x:Name="CountInBox" Content="Count-in" MinWidth="0"
                                   ToolTipService.ToolTip="Play one measure of clicks before recording" />
                         <ToggleButton x:Name="LoopButton" Content="Loop" Click="LoopClicked"

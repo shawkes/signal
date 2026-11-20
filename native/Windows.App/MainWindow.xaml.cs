@@ -365,18 +365,22 @@ public sealed partial class MainWindow : Window
     {
         long? tick = _audioFailed ? null : _engine?.PlaybackTick;
         int? countIn = _audioFailed || !_recording ? null : _engine?.CountInBeatsRemaining;
+        long? pass = _audioFailed || !_recording ? null : _engine?.RecordingLoopPass;
         RollView.SetPlayhead(tick);
         if (tick is null && !SongCaptureInProgress)
             _playheadTimer.Stop();
 
-        if (_playing == tick.HasValue && _countInRemaining == countIn)
+        if (_playing == tick.HasValue && _countInRemaining == countIn && _overdubPass == pass)
             return;
 
+        bool playbackChanged = _playing != tick.HasValue;
         _playing = tick.HasValue;
         _countInRemaining = countIn;
+        _overdubPass = pass;
         UpdatePlaybackControls();
         UpdateCalibrationControls();
-        UpdateLoopDisplay();
+        if (playbackChanged)
+            UpdateLoopDisplay();
     }
 
     private void UpdateReadout()
@@ -518,9 +522,10 @@ public sealed partial class MainWindow : Window
         StopButton.IsEnabled = audioReady && (_playing || (SongCaptureInProgress && _recording)) && !_finishingTake;
         LoopButton.IsEnabled = !_fileBusy && !takeInProgress;
         ClearLoopRangeButton.IsEnabled = !_fileBusy && !takeInProgress;
+        RollView.SetLoopRangeEditable(!takeInProgress);
         string status = _playbackError ?? (_finishingTake ? "Finishing take…" :
             _countInRemaining is { } beat ? $"Count-in {beat}" :
-            SongCaptureInProgress ? $"Recording · {_captureTrack?.Name}" :
+            SongCaptureInProgress ? SongCaptureStatus :
             _playing ? "Playing song" :
             CalibrationInProgress ? "Tap test in progress" :
             takeInProgress ? "Recording a test take" :

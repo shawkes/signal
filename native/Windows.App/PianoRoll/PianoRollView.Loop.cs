@@ -18,6 +18,7 @@ public sealed partial class PianoRollView
     private LoopRange? _loopPreview;
     private bool _loopEnabled;
     private bool _showLoopHandles;
+    private bool _loopRangeEditable = true;
     private uint? _rulerPointerId;
     private double _rulerPressX;
     private double _rulerPointerX;
@@ -26,6 +27,16 @@ public sealed partial class PianoRollView
     private DispatcherQueueTimer? _rulerScrollTimer;
 
     public event Action<LoopRange>? LoopRangeSelected;
+
+    public void SetLoopRangeEditable(bool editable)
+    {
+        _loopRangeEditable = editable;
+        if (!editable && _rulerPointerId is not null)
+        {
+            CancelRulerGesture();
+            RulerInput.ReleasePointerCaptures();
+        }
+    }
 
     public void SetLoopRange(LoopRange? range, bool enabled, bool showHandles = true)
     {
@@ -43,7 +54,7 @@ public sealed partial class PianoRollView
 
     private void RulerPointerPressed(object sender, PointerRoutedEventArgs args)
     {
-        if (!_editingEnabled || _document is null || _pointerId is not null || _rulerPointerId is not null)
+        if (!_editingEnabled || !_loopRangeEditable || _document is null || _pointerId is not null || _rulerPointerId is not null)
             return;
 
         var point = args.GetCurrentPoint(RulerInput);

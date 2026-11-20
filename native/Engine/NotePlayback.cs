@@ -34,7 +34,8 @@ internal sealed class NotePlayback(int sampleRate)
     }
 
     public PlaybackPlan? Prepare(IEnumerable<SongNote> notes, IEnumerable<SongChannelMessage> messages,
-        TempoMap tempo, IMonitorSynth synth, long endTick = 0, LoopRange? loop = null, SongMeter? meter = null)
+        TempoMap tempo, IMonitorSynth synth, long endTick = 0, LoopRange? loop = null, SongMeter? meter = null,
+        bool allowEmpty = false)
     {
         ArgumentNullException.ThrowIfNull(notes);
         ArgumentNullException.ThrowIfNull(synth);
@@ -64,7 +65,7 @@ internal sealed class NotePlayback(int sampleRate)
             long frame = tempo.TickToSample(message.Tick, sampleRate);
             events.Add(new PlaybackEvent(frame, message.Tick, message.Status, message.Data1, message.Data2, events.Count));
         }
-        if (events.Count == 0)
+        if (events.Count == 0 && !allowEmpty)
             return null;
 
         events.Sort(static (left, right) =>
@@ -78,7 +79,7 @@ internal sealed class NotePlayback(int sampleRate)
             return order != 0 ? order : left.Order.CompareTo(right.Order);
         });
         MergeOverlappingReleases(events);
-        long endFrame = Math.Max(events[^1].Frame, tempo.TickToSample(endTick, sampleRate));
+        long endFrame = Math.Max(events.Count == 0 ? 0 : events[^1].Frame, tempo.TickToSample(endTick, sampleRate));
         long endWithRelease = checked(endFrame + sampleRate);
         var plan = new PlaybackPlan(synth, tempo, meter ?? SongMeter.CommonTime, events.ToArray(), endFrame, endWithRelease);
         if (loop is { } range)
@@ -163,7 +164,12 @@ internal sealed class NotePlayback(int sampleRate)
 
         _loop = next;
         long position = firstFrame - _startFrame;
-        if (next is { } loop && (restarting || position < loop.StartFrame || position >= loop.EndFrame))
+        if (next is { } anchoredLoop && active.OriginFrame is long origin)
+        {
+            // Recording and playback must keep the same cycle phase if the endpoint skips frames.
+            SeekLoop(active, anchoredLoop, firstFrame, anchoredLoop.PositionAt(firstFrame - origin));
+        }
+        else if (next is { } loop && (restarting || position < loop.StartFrame || position >= loop.EndFrame))
         {
             SeekLoop(active, loop, firstFrame, loop.StartFrame);
         }
@@ -190,6 +196,8 @@ internal sealed class NotePlayback(int sampleRate)
             int frames = (int)Math.Min(output.Length / 2, loop.EndFrame - position);
             var segment = output[..(2 * frames)];
             RenderEvents(active.Synth, loop.Events, segment, position, loop.EndFrame, fade);
+            if (active.Overdub is { } overdub && active.OriginFrame is long origin)
+                overdub.Render(segment, (firstFrame - origin) / loop.Length, position);
             mixMetronome?.Invoke(segment, position, active.TempoMap, active.Meter,
                 Math.Max(loop.StartFrame, _firstAllowedOnset));
 
@@ -398,6 +406,7 @@ internal sealed class NotePlayback(int sampleRate)
         public long EndFrame { get; } = endFrame;
         public long EndWithRelease { get; } = endWithRelease;
         public PlaybackLoop? RequestedLoop;
+        public OverdubReplay? Overdub;
         public long? OriginFrame;
         public long Tick;
     }
@@ -406,6 +415,7 @@ internal sealed class NotePlayback(int sampleRate)
         PlaybackEvent[] Events, PlaybackEvent[] Chase)
     {
         public long Length => EndFrame - StartFrame;
+        public long PositionAt(long elapsedFrames) => StartFrame + elapsedFrames % Length;
     }
 
     internal readonly record struct PlaybackEvent(long Frame, long Tick, byte Status, byte Data1, byte Data2, int Order)
