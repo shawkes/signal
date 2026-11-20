@@ -1,0 +1,99 @@
+<UserControl
+    x:Class="Signal.Native.Windows.App.PianoRoll.PianoRollView"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    IsTabStop="True"
+    AutomationProperties.Name="Piano roll"
+    PreviewKeyDown="EditorKeyDown">
+    <Grid RowSpacing="12">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <Grid ColumnSpacing="16">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <StackPanel Orientation="Horizontal" Spacing="6">
+                <Button x:Name="AddButton" Click="AddClicked" ToolTipService.ToolTip="Add note (Insert)"
+                        AutomationProperties.Name="Add note">
+                    <StackPanel Orientation="Horizontal" Spacing="7">
+                        <SymbolIcon Symbol="Add" />
+                        <TextBlock Text="Add note" />
+                    </StackPanel>
+                </Button>
+                <Button x:Name="DeleteButton" Click="DeleteClicked" IsEnabled="False"
+                        ToolTipService.ToolTip="Delete selected note (Delete)" AutomationProperties.Name="Delete note">
+                    <StackPanel Orientation="Horizontal" Spacing="7">
+                        <SymbolIcon Symbol="Delete" />
+                        <TextBlock Text="Delete" />
+                    </StackPanel>
+                </Button>
+                <Button x:Name="UndoButton" Click="UndoClicked" IsEnabled="False"
+                        ToolTipService.ToolTip="Undo last edit (Ctrl+Z)" AutomationProperties.Name="Undo">
+                    <StackPanel Orientation="Horizontal" Spacing="7">
+                        <SymbolIcon Symbol="Undo" />
+                        <TextBlock Text="Undo" />
+                    </StackPanel>
+                </Button>
+            </StackPanel>
+            <TextBlock x:Name="SelectionText" Grid.Column="1" VerticalAlignment="Center"
+                       TextTrimming="CharacterEllipsis" Style="{StaticResource CaptionTextBlockStyle}" />
+            <TextBlock x:Name="NoteCountText" Grid.Column="2" VerticalAlignment="Center"
+                       Style="{StaticResource CaptionTextBlockStyle}" Text="0 notes" />
+        </Grid>
+
+        <Border Grid.Row="1" CornerRadius="6" BorderThickness="1"
+                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="30" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="68" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <Border x:Name="Corner" BorderThickness="0,0,1,1"
+                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}">
+                    <TextBlock Text="Pitch" Margin="10,0,0,0" VerticalAlignment="Center"
+                               Style="{StaticResource CaptionTextBlockStyle}" />
+                </Border>
+                <Canvas x:Name="Timeline" Grid.Column="1" IsHitTestVisible="False" />
+                <Canvas x:Name="PitchKeys" Grid.Row="1" IsHitTestVisible="False" />
+                <ScrollViewer x:Name="EditorScroll" Grid.Row="1" Grid.Column="1"
+                              HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto"
+                              HorizontalScrollMode="Enabled" VerticalScrollMode="Enabled"
+                              HorizontalContentAlignment="Left" VerticalContentAlignment="Top"
+                              ZoomMode="Disabled" IsTabStop="False" BringIntoViewOnFocusChange="False"
+                              ViewChanged="EditorViewChanged" SizeChanged="EditorSizeChanged">
+                    <Grid x:Name="Surface" PointerPressed="SurfacePointerPressed"
+                          PointerMoved="SurfacePointerMoved" PointerReleased="SurfacePointerReleased"
+                          PointerCaptureLost="SurfacePointerCanceled" PointerCanceled="SurfacePointerCanceled">
+                        <Canvas x:Name="GridLayer" IsHitTestVisible="False" />
+                        <Canvas x:Name="BeatLayer" IsHitTestVisible="False" />
+                        <Canvas x:Name="NotesLayer" IsHitTestVisible="False" />
+                        <Canvas x:Name="TransportLayer" IsHitTestVisible="False">
+                            <Rectangle x:Name="Cursor" Width="2" Visibility="Collapsed" />
+                        </Canvas>
+                    </Grid>
+                </ScrollViewer>
+            </Grid>
+        </Border>
+
+        <Grid Grid.Row="2" ColumnSpacing="12">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <TextBlock Text="Click an empty cell to add. Drag a note to move it or its right edge to resize."
+                       TextWrapping="Wrap" Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                       Style="{StaticResource CaptionTextBlockStyle}" />
+            <TextBlock Grid.Column="1" Text="1/16 edit grid" Style="{StaticResource CaptionTextBlockStyle}" />
+        </Grid>
+    </Grid>
+</UserControl>
