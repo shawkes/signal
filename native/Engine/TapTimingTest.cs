@@ -33,8 +33,7 @@ public sealed class TapTimingTest
             Span<double> sorted = stackalloc double[TargetTaps];
             var samples = sorted[..MeasuredTaps];
             _errors.AsSpan(0, MeasuredTaps).CopyTo(samples);
-            samples.Sort();
-            OffsetMilliseconds = (samples[(samples.Length - 1) / 2] + samples[samples.Length / 2]) / 2;
+            OffsetMilliseconds = TimingStatistics.SortAndGetMedian(samples);
         }
     }
 }

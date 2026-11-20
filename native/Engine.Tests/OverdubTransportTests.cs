@@ -104,6 +104,53 @@ public sealed class OverdubTransportTests
     }
 
     [Fact]
+    public void NegativeOffsetCarriesLateAttacksIntoTheNextPassAtTheWrappedTempo()
+    {
+        var engine = CreateEngine();
+        var song = new Song(ChangingTempo(), []);
+        long take = engine.RecordSong(song, SilentMonitorSynth.Instance, false, -112,
+            timestamp: Origin, loop: Loop, overdubSynth: new GateSynth(OverdubLevel));
+        engine.TryEnqueue(new MidiMessage(Origin + 718, 0x90, 64, 90));
+        var first = Render(engine, Origin, 724);
+        Assert.All(first, sample => Assert.Equal(0, sample));
+        var preview = new HeldRecordingNote[1];
+        Assert.Equal(1, engine.CopyHeldRecordingNotes(take, preview));
+        Assert.Equal(new HeldRecordingNote(0, 64, 0, 108, 1), preview[0]);
+        engine.TryEnqueue(new MidiMessage(Origin + 728, 0x80, 64, 0));
+        Render(engine, Origin + 724, 26);
+        Assert.True(engine.TryReadNote(out var note));
+        Assert.Equal((108L, 2L, 10L), (note.StartTick, note.LengthTicks, note.PlayedLengthFrames));
+
+        var second = Render(engine, Origin + 750, 125);
+        Assert.Equal(0, second[0]);
+        Assert.Equal(0, second[79 * 2]);
+        Assert.Equal(OverdubLevel, second[80 * 2]);
+        Assert.Equal(OverdubLevel, second[99 * 2]);
+        Assert.Equal(0, second[100 * 2]);
+    }
+
+    [Fact]
+    public void OffsetLongerThanALoopDoesNotReplayTheNoteBeforeItsPlacedPass()
+    {
+        var engine = CreateEngine();
+        var song = new Song(TempoMap.Constant(120, 500), []);
+        engine.RecordSong(song, SilentMonitorSynth.Instance, false, -112, timestamp: Origin,
+            loop: new LoopRange(500, 550), overdubSynth: new GateSynth(OverdubLevel));
+        engine.TryEnqueue(new MidiMessage(Origin + 20, 0x90, 64, 90));
+        engine.TryEnqueue(new MidiMessage(Origin + 45, 0x80, 64, 0));
+        var audio = Render(engine, Origin, 200);
+        Assert.True(engine.TryReadNote(out var note));
+        Assert.Equal((532L, 18L), (note.StartTick, note.LengthTicks));
+        Assert.True(engine.TryReadNote(out var continuation));
+        Assert.Equal((500L, 7L), (continuation.StartTick, continuation.LengthTicks));
+        Assert.All(audio[..(132 * 2)], sample => Assert.Equal(0, sample));
+        Assert.Equal(OverdubLevel, audio[132 * 2]);
+        Assert.Equal(OverdubLevel, audio[150 * 2]);
+        Assert.Equal(0, audio[157 * 2]);
+        Assert.Equal(OverdubLevel, audio[182 * 2]);
+    }
+
+    [Fact]
     public void LoopCaptureAndReplayRenderWithoutManagedAllocationsAfterWarmup()
     {
         var engine = CreateEngine();

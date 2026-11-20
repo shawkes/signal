@@ -3,6 +3,9 @@ namespace Signal.Native.Engine;
 /// <summary>A MIDI channel message timestamped at receipt, in the audio clock's timestamp units.</summary>
 public readonly record struct MidiMessage(long Timestamp, byte Status, byte Data1, byte Data2);
 
+/// <summary>The destination channel and caller's track index for a live MIDI input channel.</summary>
+public readonly record struct LiveMidiDestination(byte Channel, int TrackIndex);
+
 public interface IMonitorSynth
 {
     void ProcessMidi(byte status, byte data1, byte data2);

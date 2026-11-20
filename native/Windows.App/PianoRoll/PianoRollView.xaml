@@ -55,6 +55,7 @@
                 BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}">
             <Grid>
                 <Grid.RowDefinitions>
+                    <RowDefinition Height="32" />
                     <RowDefinition Height="30" />
                     <RowDefinition Height="*" />
                 </Grid.RowDefinitions>
@@ -62,12 +63,26 @@
                     <ColumnDefinition x:Name="PitchColumn" Width="68" />
                     <ColumnDefinition Width="*" />
                 </Grid.ColumnDefinitions>
-                <Border x:Name="Corner" BorderThickness="0,0,1,1"
+                <Border x:Name="TempoHeader" BorderThickness="0,0,1,1"
+                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}">
+                    <TextBlock Text="Tempo" Margin="10,0,0,0" VerticalAlignment="Center"
+                               Style="{StaticResource CaptionTextBlockStyle}" />
+                </Border>
+                <Grid x:Name="TempoInput" Grid.Column="1" BorderThickness="0,0,0,1"
+                      BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                      AutomationProperties.Name="Song tempo lane"
+                      ToolTipService.ToolTip="Click to add or edit a tempo. Drag a marker to move it."
+                      PointerPressed="TempoPointerPressed" PointerMoved="TempoPointerMoved"
+                      PointerReleased="TempoPointerReleased" PointerCaptureLost="TempoPointerCanceled"
+                      PointerCanceled="TempoPointerCanceled">
+                    <Canvas x:Name="TempoCanvas" IsHitTestVisible="False" />
+                </Grid>
+                <Border x:Name="Corner" Grid.Row="1" BorderThickness="0,0,1,1"
                         BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}">
                     <TextBlock x:Name="PitchHeader" Text="Pitch" Margin="10,0,0,0" VerticalAlignment="Center"
                                Style="{StaticResource CaptionTextBlockStyle}" />
                 </Border>
-                <Grid x:Name="RulerInput" Grid.Column="1"
+                <Grid x:Name="RulerInput" Grid.Row="1" Grid.Column="1"
                       AutomationProperties.Name="Loop range ruler"
                       ToolTipService.ToolTip="Drag to set the loop range. Drag either end to resize."
                       PointerPressed="RulerPointerPressed" PointerMoved="RulerPointerMoved"
@@ -80,8 +95,8 @@
                     </Canvas>
                     <Canvas x:Name="Timeline" IsHitTestVisible="False" />
                 </Grid>
-                <Canvas x:Name="PitchKeys" Grid.Row="1" IsHitTestVisible="False" />
-                <ScrollViewer x:Name="EditorScroll" Grid.Row="1" Grid.Column="1"
+                <Canvas x:Name="PitchKeys" Grid.Row="2" IsHitTestVisible="False" />
+                <ScrollViewer x:Name="EditorScroll" Grid.Row="2" Grid.Column="1"
                               HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto"
                               HorizontalScrollMode="Enabled" VerticalScrollMode="Enabled"
                               HorizontalContentAlignment="Left" VerticalContentAlignment="Top"
@@ -96,6 +111,8 @@
                         </Canvas>
                         <Canvas x:Name="BeatLayer" IsHitTestVisible="False" />
                         <Canvas x:Name="NotesLayer" />
+                        <Canvas x:Name="RecordedLayer" IsHitTestVisible="False" />
+                        <Canvas x:Name="HeldLayer" IsHitTestVisible="False" />
                         <Canvas x:Name="TransportLayer" IsHitTestVisible="False">
                             <Rectangle x:Name="Cursor" Width="2" Visibility="Collapsed" />
                             <Rectangle x:Name="SelectionBox" StrokeThickness="1" Opacity="0.3" Visibility="Collapsed" />
@@ -122,6 +139,7 @@
                     <ComboBoxItem Content="1/8" />
                     <ComboBoxItem Content="1/16" />
                     <ComboBoxItem Content="1/32" />
+                    <ComboBoxItem Content="1/64" />
                 </ComboBox>
             </StackPanel>
         </Grid>

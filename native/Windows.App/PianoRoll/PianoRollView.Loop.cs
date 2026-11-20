@@ -54,7 +54,8 @@ public sealed partial class PianoRollView
 
     private void RulerPointerPressed(object sender, PointerRoutedEventArgs args)
     {
-        if (!_editingEnabled || !_loopRangeEditable || _document is null || _pointerId is not null || _rulerPointerId is not null)
+        if (!_editingEnabled || !_loopRangeEditable || _document is null || _pointerId is not null ||
+            _rulerPointerId is not null || _tempoPointerId is not null)
             return;
 
         var point = args.GetCurrentPoint(RulerInput);
@@ -158,12 +159,15 @@ public sealed partial class PianoRollView
     private long SnapRulerTick(double x)
     {
         double contentX = EditorScroll.HorizontalOffset + Math.Clamp(x, 0, EditorScroll.ViewportWidth);
-        double beat = Math.Round(Math.Min(contentX, Surface.Width) / BeatWidth, MidpointRounding.AwayFromZero);
-        return Math.Clamp(long.CreateSaturating(beat), 0, long.MaxValue / _ticksPerBeat) * _ticksPerBeat;
+        double rawTick = Math.Min(contentX, Surface.Width) / BeatWidth * _ticksPerBeat;
+        long tick = long.CreateSaturating(Math.Floor(rawTick));
+        long before = _meterMap.PositionAt(tick).BeatTick;
+        long after = _meterMap.NextBeatTick(tick);
+        return rawTick - before < after - rawTick ? before : after;
     }
 
-    private long PreviousBeat(long tick) => Math.Max(0, tick - 1) / _ticksPerBeat * _ticksPerBeat;
-    private long NextBeat(long tick) => long.CreateSaturating(((Int128)tick / _ticksPerBeat + 1) * _ticksPerBeat);
+    private long PreviousBeat(long tick) => _meterMap.PositionAt(Math.Max(0, tick - 1)).BeatTick;
+    private long NextBeat(long tick) => _meterMap.NextBeatTick(tick);
 
     private bool HitsRulerHandle(long tick, double pointerX)
     {

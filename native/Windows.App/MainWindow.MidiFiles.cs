@@ -18,6 +18,9 @@ public sealed partial class MainWindow
     private string SongName => _songPath is null ? "Untitled" : Path.GetFileName(_songPath);
     private bool SongIsDirty => _trackEditor.IsDirty;
 
+    private static Song CreateEmptySong() =>
+        new(TempoMap.Constant(120), [new SongTrack("Track 1", [], [new(0, 0xc0, 0, 0)])]);
+
     private void ReplaceSong(Song song, MidiFileDocument? source = null, string? path = null)
     {
         var editor = new SongTrackEditor(song, imported: source is not null);
@@ -39,23 +42,21 @@ public sealed partial class MainWindow
         _loopEnabled = false;
 
         RefreshTrackPanel(editor.Tracks.FirstOrDefault(track => track.Document.Notes.Count > 0) ?? editor.Tracks[0]);
-        double initialBpm = 60_000_000.0 / SongTempo.Changes[0].MicrosecondsPerQuarterNote;
-        int changes = SongTempo.Changes.Count - 1;
-        var meter = song.OpeningMeter;
-        SongTempoText.Text = $"{initialBpm:0.#} BPM  ·  {meter.Numerator}/{meter.Denominator}" +
-            (changes == 0 ? "" : $"  ·  {changes} tempo {(changes == 1 ? "change" : "changes")}");
         SongEdited();
     }
 
     private void SongEdited()
     {
-        _songEndTick = _trackEditor.Tracks.Max(track => Math.Max(track.EndTick,
+        long trackEnd = _trackEditor.Tracks.Max(track => Math.Max(track.EndTick,
             track.Document.Notes.Select(item => item.Note)
                 .Select(note => note.LengthTicks == 0 && note.StartTick < long.MaxValue
                     ? note.StartTick + 1
                     : note.StartTick + note.LengthTicks)
                 .DefaultIfEmpty().Max()));
+        _songEndTick = Song.IncludeTimingMarkers(trackEnd, _trackEditor.TempoMap, _trackEditor.MeterMap);
         RollView.SetTimelineEnd(_songEndTick);
+        RollView.SetMeterMap(_trackEditor.MeterMap);
+        UpdateTempoSummary();
         UpdateSongName();
         UpdateControls();
         UpdateLoopDisplay();
@@ -70,6 +71,30 @@ public sealed partial class MainWindow
 
     private Song SnapshotSong() => _trackEditor.SnapshotSong();
 
+    private async void NewSongClicked(object sender, RoutedEventArgs args)
+    {
+        if (_fileBusy || CaptureInProgress)
+            return;
+
+        SetFileBusy(true);
+        try
+        {
+            if (await ConfirmReplaceSongAsync())
+            {
+                ReplaceSong(CreateEmptySong());
+                WorkspaceTabs.SelectedItem = PianoRollTab;
+            }
+        }
+        catch (Exception error)
+        {
+            ShowFileError("Could not create a new song", error);
+        }
+        finally
+        {
+            SetFileBusy(false);
+        }
+    }
+
     private async void OpenSongClicked(object sender, RoutedEventArgs args)
     {
         SetFileBusy(true);
@@ -83,7 +108,10 @@ public sealed partial class MainWindow
             picker.FileTypeFilter.Add(".midi");
             var file = await picker.PickSingleFileAsync();
             if (file is not null)
+            {
                 await ReadSongAsync(file.Path);
+                WorkspaceTabs.SelectedItem = PianoRollTab;
+            }
         }
         catch (Exception error)
         {
@@ -101,11 +129,11 @@ public sealed partial class MainWindow
         ReplaceSong(document.Song, document, path);
     }
 
-    private async void SaveSongClicked(object sender, RoutedEventArgs args) => await SaveFromToolbarAsync(saveAs: false);
+    private async void SaveSongClicked(object sender, RoutedEventArgs args) => await SaveFromMenuAsync(saveAs: false);
 
-    private async void SaveSongAsClicked(object sender, RoutedEventArgs args) => await SaveFromToolbarAsync(saveAs: true);
+    private async void SaveSongAsClicked(object sender, RoutedEventArgs args) => await SaveFromMenuAsync(saveAs: true);
 
-    private async Task SaveFromToolbarAsync(bool saveAs)
+    private async Task SaveFromMenuAsync(bool saveAs)
     {
         SetFileBusy(true);
         try
@@ -233,9 +261,13 @@ public sealed partial class MainWindow
     private void UpdateFileControls()
     {
         bool ready = !_fileBusy && !_recording && !_finishingTake;
+        NewSongMenuItem.IsEnabled = ready;
         OpenSongButton.IsEnabled = ready;
         SaveSongButton.IsEnabled = ready;
         SaveSongAsButton.IsEnabled = ready;
+        TempoChangesButton.IsEnabled = ready;
+        MeterButton.IsEnabled = ready;
+        RollView.SetTempoEditingEnabled(ready);
     }
 
     private void ShowFileError(string title, Exception error)
@@ -243,5 +275,6 @@ public sealed partial class MainWindow
         FileErrorBar.Title = title;
         FileErrorBar.Message = error.Message;
         FileErrorBar.IsOpen = true;
+        WorkspaceTabs.SelectedItem = PianoRollTab;
     }
 }

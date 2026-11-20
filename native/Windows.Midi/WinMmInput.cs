@@ -1,16 +1,19 @@
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using System.Text;
 using Signal.Native.Engine;
 
 namespace Signal.Native.Windows.Midi;
 
-public sealed record MidiInputDevice(uint Id, string Name);
+public sealed record MidiInputDevice(uint Id, string Name, string? InterfacePath = null);
 
 public sealed class WinMmInput : IDisposable
 {
     private const uint CallbackFunction = 0x30000;
     private const uint DataMessage = 0x3C3;
+    private const uint QueryDeviceInterface = 0x080C;
+    private const uint QueryDeviceInterfaceSize = 0x080D;
     private readonly Action<MidiMessage> _receive;
     private readonly NativeCallback _callback;
     private nint _handle;
@@ -21,9 +24,20 @@ public sealed class WinMmInput : IDisposable
         for (uint id = 0, count = midiInGetNumDevs(); id < count; id++)
         {
             if (midiInGetDevCaps(id, out var caps, (uint)Marshal.SizeOf<InputCaps>()) == 0)
-                devices.Add(new MidiInputDevice(id, caps.Name));
+                devices.Add(new MidiInputDevice(id, caps.Name, GetInterfacePath(id)));
         }
         return devices;
+    }
+
+    // WinMM device numbers can change after a restart or when another controller is plugged in.
+    private static string? GetInterfacePath(uint id)
+    {
+        if (GetInterfaceSize(id, QueryDeviceInterfaceSize, out uint bytes, 0) != 0 ||
+            bytes < sizeof(char) || bytes > 65536)
+            return null;
+
+        var path = new StringBuilder((int)bytes / sizeof(char));
+        return GetInterfaceName(id, QueryDeviceInterface, path, bytes) == 0 && path.Length > 0 ? path.ToString() : null;
     }
 
     public WinMmInput(uint id, Action<MidiMessage> receive)
@@ -46,7 +60,8 @@ public sealed class WinMmInput : IDisposable
 
         long received = Stopwatch.GetTimestamp();
         byte status = (byte)data;
-        if (status is >= 0x80 and < 0xF0)
+        // System-common and real-time short messages are useful to the MIDI monitor.
+        if (status >= 0x80)
             _receive(new MidiMessage(received, status, (byte)((data >> 8) & 0x7F), (byte)((data >> 16) & 0x7F)));
     }
 
@@ -84,6 +99,12 @@ public sealed class WinMmInput : IDisposable
 
     [DllImport("winmm.dll", ExactSpelling = true)]
     private static extern uint midiInGetNumDevs();
+
+    [DllImport("winmm.dll", EntryPoint = "midiInMessage", ExactSpelling = true)]
+    private static extern uint GetInterfaceSize(nuint deviceId, uint message, out uint byteCount, nuint unused);
+
+    [DllImport("winmm.dll", EntryPoint = "midiInMessage", ExactSpelling = true, CharSet = CharSet.Unicode)]
+    private static extern uint GetInterfaceName(nuint deviceId, uint message, [Out] StringBuilder name, nuint byteCount);
 
     [DllImport("winmm.dll", EntryPoint = "midiInGetDevCapsW", ExactSpelling = true)]
     private static extern uint midiInGetDevCaps(nuint device, out InputCaps caps, uint size);

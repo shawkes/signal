@@ -5,9 +5,11 @@ using System.Runtime.InteropServices;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Media;
 using Microsoft.Windows.Storage.Pickers;
 using Signal.Native.Engine;
 using Signal.Native.SoundFont;
+using Signal.Native.Windows.App.Settings;
 using Signal.Native.Windows.Audio;
 using Signal.Native.Windows.Midi;
 using Windows.Graphics;
@@ -19,11 +21,15 @@ public sealed partial class MainWindow : Window
     private readonly ObservableCollection<TakeRow> _rows = [];
     private readonly List<SongNote> _capturedNotes = [];
     private readonly DispatcherQueueTimer _uiTimer;
-    private readonly DispatcherQueueTimer _playheadTimer;
+    private bool _watchingTransportFrames;
     private readonly string? _startupMidiPath;
     private WasapiOutput? _output;
+    private RecordedNotePump? _notePump;
     private LatencyEngine? _engine;
     private WinMmInput? _midiInput;
+    private readonly RecordingPreferences _preferences = RecordingPreferences.ForCurrentUser();
+    private MidiInputPreference? _preferredMidiInput;
+    private double? _savedRecordingOffset;
     private MeltySynth.SoundFont? _bank;
     private bool _updatingDevices = true;
     private bool _closed;
@@ -43,20 +49,24 @@ public sealed partial class MainWindow : Window
     {
         InitializeComponent();
         OffsetBox.NumberFormatter = new global::Windows.Globalization.NumberFormatting.DecimalFormatter { FractionDigits = 1 };
+        _savedRecordingOffset = _preferences.ReadOffset();
+        if (_savedRecordingOffset is { } offset)
+            OffsetBox.Value = offset;
+        _preferredMidiInput = _preferences.ReadMidiInput();
         _startupMidiPath = startupMidiPath;
         AppWindow.Resize(new SizeInt32(1200, 780));
         TakeList.ItemsSource = _rows;
         RollView.LoopRangeSelected += LoopRangeSelected;
+        RollView.TempoMarkerEdited += EditTempoMarker;
+        RollView.TempoMarkerMoved += MoveTempoMarker;
+        RollView.TempoUndoRequested += UndoTempoMarkerEdit;
         WorkspaceTabs.Loaded += OnLoaded;
         AppWindow.Closing += WindowClosing;
         Closed += OnClosed;
         _uiTimer = DispatcherQueue.CreateTimer();
         _uiTimer.Interval = TimeSpan.FromMilliseconds(125);
         _uiTimer.Tick += (_, _) => UpdateReadout();
-        _playheadTimer = DispatcherQueue.CreateTimer();
-        _playheadTimer.Interval = TimeSpan.FromMilliseconds(33);
-        _playheadTimer.Tick += (_, _) => UpdatePlayhead();
-        ReplaceSong(new Song(TempoMap.Constant(120), [new SongTrack("Track 1", [], [new(0, 0xc0, 0, 0)])]));
+        ReplaceSong(CreateEmptySong());
     }
 
     private async void OnLoaded(object sender, RoutedEventArgs args)
@@ -89,7 +99,6 @@ public sealed partial class MainWindow : Window
     private void RefreshDevices()
     {
         var audioId = (AudioDeviceBox.SelectedItem as ComboBoxItem)?.Tag as string;
-        var midiId = (MidiDeviceBox.SelectedItem as ComboBoxItem)?.Tag as MidiInputDevice;
         _updatingDevices = true;
         try
         {
@@ -110,21 +119,38 @@ public sealed partial class MainWindow : Window
         }
         finally
         {
-            MidiDeviceBox.Items.Clear();
-            var midiDevices = WinMmInput.EnumerateDevices();
-            MidiDeviceBox.Items.Add(new ComboBoxItem
+            try
             {
-                Content = midiDevices.Count == 0 ? "No MIDI input detected" : "No MIDI input selected"
-            });
-            MidiDeviceBox.SelectedIndex = 0;
-            foreach (var device in midiDevices)
-            {
-                var item = new ComboBoxItem { Content = device.Name, Tag = device };
-                MidiDeviceBox.Items.Add(item);
-                if (device == midiId)
-                    MidiDeviceBox.SelectedItem = item;
+                PopulateMidiInputs(WinMmInput.EnumerateDevices());
             }
-            _updatingDevices = false;
+            finally
+            {
+                _updatingDevices = false;
+            }
+        }
+    }
+
+    private void PopulateMidiInputs(IReadOnlyList<MidiInputDevice> devices)
+    {
+        MidiDeviceBox.Items.Clear();
+        var restored = _preferredMidiInput?.Find(devices);
+        MidiDeviceBox.Items.Add(new ComboBoxItem
+        {
+            Content = devices.Count == 0 ? "No MIDI input detected" : "No MIDI input selected"
+        });
+        MidiDeviceBox.SelectedIndex = 0;
+        foreach (var device in devices)
+        {
+            var item = new ComboBoxItem { Content = device.Name, Tag = device };
+            MidiDeviceBox.Items.Add(item);
+            if (device == restored)
+                MidiDeviceBox.SelectedItem = item;
+        }
+        if (restored is null && _preferredMidiInput is { } missing)
+        {
+            var unavailable = new ComboBoxItem { Content = $"{missing.Name} (unavailable)", IsEnabled = false };
+            MidiDeviceBox.Items.Add(unavailable);
+            MidiDeviceBox.SelectedItem = unavailable;
         }
     }
 
@@ -146,9 +172,11 @@ public sealed partial class MainWindow : Window
         _playbackError = null;
         _output?.Dispose();
         _output = null;
+        _notePump?.Dispose();
+        _notePump = null;
         Volatile.Write(ref _engine, null);
         _audioFailed = false;
-        AudioCountersText.Text = "";
+        ShowAudioCounters(null, null);
         WasapiOutput? candidate = null;
         try
         {
@@ -161,20 +189,21 @@ public sealed partial class MainWindow : Window
             var id = (AudioDeviceBox.SelectedItem as ComboBoxItem)?.Tag as string;
             LatencyEngine? renderer = null;
             candidate = new WasapiOutput(id, (samples, firstFrame, timestamp) =>
-                renderer!.Render(samples, firstFrame, new AudioClockAnchor(timestamp, firstFrame)), preference);
+                renderer!.Render(samples, firstFrame, new AudioClockAnchor(timestamp, firstFrame), Stopwatch.GetTimestamp()), preference);
             renderer = new LatencyEngine(candidate.SampleRate, SilentMonitorSynth.Instance)
             {
-                MetronomeEnabled = MetronomeSwitch.IsOn
+                MetronomeEnabled = SongMetronomeButton.IsChecked == true,
+                PreviewMetronomeEnabled = SettingsMetronomeIsActive
             };
-            ApplySoundFont(renderer, candidate.SampleRate);
+            ConfigureLiveMidi(renderer);
             candidate.Start();
-            _output = candidate;
-            Volatile.Write(ref _engine, renderer);
-
             string period = FormatFrames(candidate.PeriodFrames, candidate.SampleRate);
             string capacity = FormatFrames(candidate.BufferFrames, candidate.SampleRate);
             AudioFormatText.Text = $"{candidate.Mode} · {candidate.SampleRate:N0} Hz · {candidate.Channels} ch\n"
                 + $"Period {period} · Buffer {capacity}";
+            _notePump = new RecordedNotePump(renderer);
+            _output = candidate;
+            Volatile.Write(ref _engine, renderer);
         }
         catch (Exception error)
         {
@@ -187,8 +216,39 @@ public sealed partial class MainWindow : Window
 
     private void MidiInputChanged(object sender, SelectionChangedEventArgs args)
     {
-        if (!_updatingDevices)
-            OpenMidi();
+        if (_updatingDevices || MidiDeviceBox.SelectedItem is not ComboBoxItem item)
+            return;
+
+        _preferredMidiInput = item.Tag is MidiInputDevice device ? new(device.Name, device.InterfacePath) : null;
+        TrySavePreference(() => _preferences.SaveMidiInput(_preferredMidiInput));
+        OpenMidi();
+    }
+
+    private bool IsSavedOffset(double offset) => _savedRecordingOffset == offset && RecordingOffset == offset;
+
+    private void ApplyRecordingOffset(double offset)
+    {
+        OffsetBox.Value = offset;
+        if (TrySavePreference(() => _preferences.SaveOffset(offset)))
+            _savedRecordingOffset = offset;
+        UpdatePlacementOffsetAction();
+        UpdateCalibrationControls();
+    }
+
+    private bool TrySavePreference(Action save)
+    {
+        try
+        {
+            save();
+            PreferenceErrorText.Visibility = Visibility.Collapsed;
+            return true;
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            PreferenceErrorText.Text = $"Could not save this preference for the next launch. {error.Message}";
+            PreferenceErrorText.Visibility = Visibility.Visible;
+            return false;
+        }
     }
 
     private void OpenMidi()
@@ -199,6 +259,7 @@ public sealed partial class MainWindow : Window
         MidiErrorText.Visibility = Visibility.Collapsed;
         if ((MidiDeviceBox.SelectedItem as ComboBoxItem)?.Tag is not MidiInputDevice device)
         {
+            UpdateMidiMonitorInput();
             UpdateCalibrationControls();
             return;
         }
@@ -212,13 +273,21 @@ public sealed partial class MainWindow : Window
             MidiErrorText.Text = error.Message;
             MidiErrorText.Visibility = Visibility.Visible;
         }
+        UpdateMidiMonitorInput();
         UpdateCalibrationControls();
     }
 
     private void ReceiveMidi(MidiMessage message)
     {
-        if (Volatile.Read(ref _activeTapInput) != SpaceTapInput && Volatile.Read(ref _engine) is { } engine)
-            EnqueueMonitoredMidi(engine, message);
+        if (message.Status < 0xF0 && Volatile.Read(ref _engine) is { } engine)
+        {
+            int tapInput = Volatile.Read(ref _activeTapInput);
+            if (tapInput == MidiTapInput)
+                engine.TryEnqueue(message);
+            else if (tapInput != SpaceTapInput)
+                engine.TryEnqueueLiveMidi(message);
+        }
+        Volatile.Read(ref _midiMonitorBuffer)?.Capture(message);
     }
 
     private async void LoadSoundFontClicked(object sender, RoutedEventArgs args)
@@ -247,17 +316,14 @@ public sealed partial class MainWindow : Window
             if (_closed)
                 return;
 
-            SoundFontPiano? piano = _output is { SampleRate: >= 16000 and <= 192000 } output
-                ? new SoundFontPiano(bank, output.SampleRate)
-                : null;
             _bank = bank;
+            if (_engine is { } engine)
+                ConfigureLiveMidi(engine);
             RefreshTrackSound();
             string name = Path.GetFileName(path);
-            SoundFontText.Text = _output is not null && piano is null
+            SoundFontText.Text = _output is { SampleRate: < 16000 or > 192000 }
                 ? $"{name} requires a 16–192 kHz output"
                 : name;
-            if (piano is not null)
-                _engine?.SetSynth(piano);
         }
         catch (Exception error)
         {
@@ -272,29 +338,35 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private void ApplySoundFont(LatencyEngine engine, int sampleRate)
-    {
-        if (_bank is null)
-            return;
-
-        if (sampleRate is >= 16000 and <= 192000)
-            engine.SetSynth(new SoundFontPiano(_bank, sampleRate));
-    }
-
     private void MetronomeToggled(object sender, RoutedEventArgs args)
     {
         bool enabled = MetronomeSwitch.IsOn;
-        SongMetronomeButton.IsChecked = enabled;
-        if (_engine is not null)
-            _engine.MetronomeEnabled = enabled;
+        if (!enabled && _recording && _capturePurpose == CapturePurpose.PlacementTest)
+            _placementClickContinuous = false;
+        UpdateSettingsMetronome();
     }
 
-    private void SongMetronomeClicked(object sender, RoutedEventArgs args) =>
-        MetronomeSwitch.IsOn = SongMetronomeButton.IsChecked == true;
+    private bool SettingsMetronomeIsActive => MetronomeSwitch.IsOn &&
+        (ReferenceEquals(WorkspaceTabs.SelectedItem, RecordingSettingsTab) ||
+            (_recording && _capturePurpose != CapturePurpose.Song));
+
+    private void WorkspaceTabChanged(object sender, SelectionChangedEventArgs args) => UpdateSettingsMetronome();
+
+    private void UpdateSettingsMetronome()
+    {
+        if (_engine is { } engine)
+            engine.PreviewMetronomeEnabled = SettingsMetronomeIsActive;
+    }
+
+    private void SongMetronomeClicked(object sender, RoutedEventArgs args)
+    {
+        if (_engine is { } engine)
+            engine.MetronomeEnabled = SongMetronomeButton.IsChecked == true;
+    }
 
     private async void TestNoteClicked(object sender, RoutedEventArgs args)
     {
-        if (_engine is not { } engine || CalibrationInProgress)
+        if (_engine is not { } engine || CaptureInProgress || _selectedTrack is not { } track)
             return;
 
         _testNoteHeld = true;
@@ -302,9 +374,9 @@ public sealed partial class MainWindow : Window
         const byte note = 60;
         try
         {
-            EnqueueMonitoredMidi(engine, new MidiMessage(Stopwatch.GetTimestamp(), 0x9F, note, 100));
+            engine.TryEnqueue(new MidiMessage(Stopwatch.GetTimestamp(), (byte)(0x90 | track.PrimaryChannel), note, 100));
             await Task.Delay(160);
-            EnqueueMonitoredMidi(engine, new MidiMessage(Stopwatch.GetTimestamp(), 0x8F, note, 0));
+            engine.TryEnqueue(new MidiMessage(Stopwatch.GetTimestamp(), (byte)(0x80 | track.PrimaryChannel), note, 0));
         }
         finally
         {
@@ -338,7 +410,7 @@ public sealed partial class MainWindow : Window
             _playingSongEndTick = _songEndTick;
             _playbackError = null;
             UpdatePlayhead();
-            _playheadTimer.Start();
+            WatchTransportFrames(true);
         }
         catch (Exception error) when (error is ArgumentException or InvalidOperationException or OverflowException)
         {
@@ -361,14 +433,49 @@ public sealed partial class MainWindow : Window
         UpdatePlayhead();
     }
 
+    private void WatchTransportFrames(bool enabled)
+    {
+        if (_watchingTransportFrames == enabled)
+            return;
+        _watchingTransportFrames = enabled;
+        if (enabled)
+            CompositionTarget.Rendering += OnTransportFrame;
+        else
+            CompositionTarget.Rendering -= OnTransportFrame;
+    }
+
+    private void OnTransportFrame(object? sender, object args) => UpdatePlayhead();
+
     private void UpdatePlayhead()
     {
-        long? tick = _audioFailed ? null : _engine?.PlaybackTick;
-        int? countIn = _audioFailed || !_recording ? null : _engine?.CountInBeatsRemaining;
-        long? pass = _audioFailed || !_recording ? null : _engine?.RecordingLoopPass;
+        long? tick;
+        int? countIn = null;
+        long? pass = null;
+        if (SongCaptureInProgress && _engine is { } recordingEngine)
+        {
+            var position = _audioFailed ? default :
+                recordingEngine.ReadRecordingDisplay(_takeId, Stopwatch.GetTimestamp(), _heldPreview);
+            // Keep a released key visible until the completed-note consumer has delivered it.
+            bool heldReady = _audioFailed || (_notePump?.HasCaughtUp ?? true);
+            DrainRecordedNotes(recordingEngine);
+            if (heldReady)
+                ShowHeldRecordingNotes(position.HeldNoteCount);
+            tick = position.Tick;
+            if (_recording)
+            {
+                countIn = position.CountInBeatsRemaining;
+                pass = position.LoopPass;
+            }
+        }
+        else
+        {
+            tick = _audioFailed ? null : _engine?.PlaybackTick;
+        }
         RollView.SetPlayhead(tick);
+        if (_trackEditor is not null)
+            UpdateMeterButton(tick);
         if (tick is null && !SongCaptureInProgress)
-            _playheadTimer.Stop();
+            WatchTransportFrames(false);
 
         if (_playing == tick.HasValue && _countInRemaining == countIn && _overdubPass == pass)
             return;
@@ -389,12 +496,12 @@ public sealed partial class MainWindow : Window
             return;
 
         var diagnostics = output.Diagnostics;
-        AudioCountersText.Text = $"Render passes {diagnostics.RenderPasses:N0} · Estimated underruns {diagnostics.Underruns:N0} · "
-            + $"Clock failures {diagnostics.ClockFailures:N0} · MIDI drops {engine.DroppedMidiMessages:N0} · "
-            + $"Capture drops {engine.DroppedRecordedNotes:N0}";
+        ShowAudioCounters(diagnostics, engine);
         if (!_audioFailed && diagnostics.Failure is { } failure)
         {
             _audioFailed = true;
+            // Rendering has failed and cannot acknowledge a stop. Collect every already published release.
+            _notePump?.Dispose();
             _finishingTake |= _recording;
             _recording = false;
             AudioFormatText.Text = $"Audio stopped. {failure}";
@@ -403,25 +510,8 @@ public sealed partial class MainWindow : Window
         }
 
         // Observe completion before draining so the final pass also sees any held notes closed on stop.
-        bool takeFinished = _finishingTake && (_audioFailed || engine.CompletedTakeId == _takeId);
-        while (engine.TryReadNote(out var note))
-        {
-            if (note.TakeId != _takeId)
-                continue;
-
-            if (_capturePurpose == CapturePurpose.Calibration)
-            {
-                _tapTest?.AddTap(note.NearestBeat, note.RawMillisecondsFromBeat);
-                continue;
-            }
-
-            _noteCount++;
-            SongNote songNote = note.ToSongNote();
-            _capturedNotes.Add(songNote with { LengthTicks = Math.Max(1, songNote.LengthTicks) });
-            if (_rows.Count == 64)
-                _rows.RemoveAt(_rows.Count - 1);
-            _rows.Insert(0, TakeRow.From(note, output.SampleRate));
-        }
+        bool takeFinished = _finishingTake && (_audioFailed || _notePump?.CompletedTakeId == _takeId);
+        DrainRecordedNotes(engine);
         if (takeFinished)
             FinishTake(engine);
         if (CalibrationInProgress)
@@ -441,6 +531,50 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    private void DrainRecordedNotes(LatencyEngine engine)
+    {
+        if (_notePump is not { } pump)
+            return;
+        while (pump.TryReadNote(out var note))
+        {
+            if (note.TakeId != _takeId)
+                continue;
+
+            if (_capturePurpose == CapturePurpose.Calibration)
+            {
+                _tapTest?.AddTap(note.NearestBeat, note.RawMillisecondsFromBeat);
+                continue;
+            }
+
+            _noteCount++;
+            _placementTiming?.Add(note);
+            SongNote songNote = note.ToSongNote() with { LengthTicks = Math.Max(1, note.LengthTicks) };
+            if (_capturePurpose == CapturePurpose.Song)
+                CaptureRoutedNote(songNote, note.DestinationTrack);
+            else
+                _capturedNotes.Add(songNote);
+            if (_rows.Count == 64)
+                _rows.RemoveAt(_rows.Count - 1);
+            _rows.Insert(0, TakeRow.From(note, engine.SampleRate));
+        }
+    }
+
+    private void ShowAudioCounters(AudioDiagnostics? diagnostics, LatencyEngine? engine)
+    {
+        SetValue(RenderPassesValue, diagnostics?.RenderPasses);
+        SetValue(UnderrunsValue, diagnostics?.Underruns);
+        SetValue(ClockFailuresValue, diagnostics?.ClockFailures);
+        SetValue(MidiDropsValue, engine?.DroppedMidiMessages);
+        SetValue(CaptureDropsValue, engine?.DroppedRecordedNotes);
+
+        static void SetValue(TextBlock field, long? count)
+        {
+            string value = count?.ToString("N0") ?? "—";
+            if (field.Text != value)
+                field.Text = value;
+        }
+    }
+
     private void AddTakeToPianoRoll(int ticksPerQuarter)
     {
         if (_capturedNotes.Count == 0 || _captureTrack is not { } track)
@@ -448,33 +582,24 @@ public sealed partial class MainWindow : Window
 
         var document = track.Document;
         var first = _capturedNotes.MinBy(note => note.StartTick);
-        long sourceBar = 0;
-        long targetBar = 0;
-        double scale = 1;
-        if (_capturePurpose == CapturePurpose.PlacementTest)
-        {
-            long captureBar = 4L * ticksPerQuarter;
-            long songBar = 4L * SongTempo.TicksPerQuarter;
-            sourceBar = first.StartTick / captureBar * captureBar;
-            long rollEnd = document.Notes
-                .Select(note => note.Note.StartTick + note.Note.LengthTicks)
-                .DefaultIfEmpty()
-                .Max();
-            targetBar = rollEnd == 0 ? 0 : ((rollEnd - 1) / songBar + 1) * songBar;
-            scale = SongTempo.TicksPerQuarter / (double)ticksPerQuarter;
-        }
+        long captureBar = 4L * ticksPerQuarter;
+        long sourceBar = first.StartTick / captureBar * captureBar;
+        long rollEnd = document.Notes
+            .Select(note => note.Note.StartTick + note.Note.LengthTicks)
+            .DefaultIfEmpty()
+            .Max();
+        long targetBar = rollEnd == 0 ? 0 : _trackEditor.MeterMap.NextBarTick(rollEnd - 1);
+        double scale = SongTempo.TicksPerQuarter / (double)ticksPerQuarter;
         document.Append(_capturedNotes.Select(ShiftNote));
         var imported = ShiftNote(first);
         _firstImportedNote = (track, imported);
         _capturedNotes.Clear();
-        if (WorkspaceTabs.SelectedIndex == 0 && ReferenceEquals(_selectedTrack, track))
+        if (WorkspaceTabs.SelectedIndex == 0 &&
+            ReferenceEquals(_selectedTrack, track))
             RollView.RevealTick(imported.StartTick, imported.NoteNumber);
 
         SongNote ShiftNote(SongNote note)
         {
-            if (_capturePurpose == CapturePurpose.Song)
-                return note with { Channel = track.PrimaryChannel };
-
             return note with
             {
                 StartTick = targetBar + (long)Math.Round((note.StartTick - sourceBar) * scale, MidpointRounding.AwayFromZero),
@@ -491,7 +616,7 @@ public sealed partial class MainWindow : Window
         bool takeInProgress = CaptureInProgress;
         bool placementTest = _recording && _capturePurpose == CapturePurpose.PlacementTest;
         SoundFontButton.IsEnabled = !_loadingBank && !takeInProgress;
-        TestNoteButton.IsEnabled = pianoReady && !_testNoteHeld && !CalibrationInProgress;
+        TestNoteButton.IsEnabled = pianoReady && !_testNoteHeld && !takeInProgress;
         MetronomeSwitch.IsEnabled = audioReady && !CalibrationInProgress;
         SongMetronomeButton.IsEnabled = audioReady && !CalibrationInProgress;
         RecordButton.IsEnabled = audioReady && !_fileBusy && (!takeInProgress || placementTest);
@@ -503,6 +628,8 @@ public sealed partial class MainWindow : Window
         MidiDeviceBox.IsEnabled = !takeInProgress;
         RefreshButton.IsEnabled = !takeInProgress;
         OffsetBox.IsEnabled = !takeInProgress;
+        UpdatePlacementOffsetAction();
+        PlacementCalibrationLink.IsEnabled = !takeInProgress && !_fileBusy;
         QuantizeBox.IsEnabled = !takeInProgress;
         UpdateFileControls();
         UpdateTrackControls();
@@ -540,10 +667,12 @@ public sealed partial class MainWindow : Window
     {
         _closed = true;
         _uiTimer.Stop();
-        _playheadTimer.Stop();
+        WatchTransportFrames(false);
+        _midiMonitor?.Close();
         _midiInput?.Dispose();
         Volatile.Write(ref _engine, null);
         _output?.Dispose();
+        _notePump?.Dispose();
     }
 
     private static string FormatFrames(int frames, int sampleRate) =>

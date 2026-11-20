@@ -66,13 +66,16 @@ public sealed class LoopCaptureTests
         Assert.False(engine.TryReadNote(out _));
     }
 
-    [Fact]
-    public void AStartSnappedToTheExclusiveEndWrapsToTheNextDownbeat()
+    [Theory]
+    [InlineData(16, 475)]
+    [InlineData(32, 485)]
+    [InlineData(64, 495)]
+    public void AStartSnappedToTheExclusiveEndWrapsToTheNextDownbeat(int division, long phase)
     {
-        var engine = StartLoop(TempoMap.Constant(120), new LoopRange(480, 960), division: 16);
-        SendNote(engine, StartFrame + 475, StartFrame + 495);
+        var engine = StartLoop(TempoMap.Constant(120), new LoopRange(480, 960), division: division);
+        SendNote(engine, StartFrame + phase, StartFrame + phase + 20);
 
-        RenderThrough(engine, StartFrame + 495);
+        RenderThrough(engine, StartFrame + phase + 20);
 
         Assert.True(engine.TryReadNote(out var note));
         Assert.Equal(new SongNote(480, 19, 0, 60, 92), note.ToSongNote());

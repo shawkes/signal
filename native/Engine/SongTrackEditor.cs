@@ -28,7 +28,7 @@ public sealed class EditableSongTrack
     internal long SavedNoteRevision { get; set; }
 }
 
-/// <summary>Edits the song's track list and starting sounds, with a separate undo history from note edits.</summary>
+/// <summary>Edits tracks, starting sounds, tempo, and time signatures, with independent undo histories.</summary>
 public sealed class SongTrackEditor
 {
     public const byte DrumChannel = 9;
@@ -37,9 +37,15 @@ public sealed class SongTrackEditor
 
     private readonly List<EditableSongTrack> _tracks = [];
     private readonly Stack<(Action Revert, long Revision)> _undo = new();
+    private readonly Stack<(TempoMap Map, long Revision)> _tempoUndo = new();
+    private readonly Stack<MeterMap> _meterUndo = new();
+    private MeterMap _savedMeterMap;
     private long _revision;
     private long _nextRevision;
     private long _savedRevision;
+    private long _tempoRevision;
+    private long _nextTempoRevision;
+    private long _savedTempoRevision;
 
     public SongTrackEditor(Song song, bool imported = false)
     {
@@ -48,35 +54,114 @@ public sealed class SongTrackEditor
             throw new ArgumentException("A song needs at least one track.", nameof(song));
 
         TempoMap = song.TempoMap;
-        OpeningMeter = song.OpeningMeter;
+        MeterMap = _savedMeterMap = song.MeterMap;
         Tracks = _tracks.AsReadOnly();
         for (int index = 0; index < song.Tracks.Count; index++)
             Insert(index, new EditableSongTrack(song.Tracks[index], imported ? index : null));
     }
 
-    public TempoMap TempoMap { get; }
-    public SongMeter OpeningMeter { get; }
+    public TempoMap TempoMap { get; private set; }
+    public MeterMap MeterMap { get; private set; }
+    public SongMeter OpeningMeter => MeterMap.Changes[0].Meter;
     public IReadOnlyList<EditableSongTrack> Tracks { get; }
     public bool CanUndoTrackEdit => _undo.Count != 0;
+    public bool CanUndoTempoEdit => _tempoUndo.Count != 0;
+    public bool CanUndoMeterEdit => _meterUndo.Count != 0;
     public bool HasInstrumentChannel => FindInstrumentChannel() is not null;
     public bool IsDirty => _revision != _savedRevision
+        || _tempoRevision != _savedTempoRevision
+        || !ReferenceEquals(MeterMap, _savedMeterMap)
         || _tracks.Any(track => track.Document.Revision != track.SavedNoteRevision);
 
     public event Action? Changed;
     public event Action? TracksChanged;
 
     public Song SnapshotSong() => new(TempoMap, _tracks.Select(track =>
-        new SongTrack(track.Name, track.Document.CreatePlaybackSnapshot(), track.PlaybackMessages, track.EndTick)), OpeningMeter);
+        new SongTrack(track.Name, track.Document.CreatePlaybackSnapshot(), track.PlaybackMessages, track.EndTick)), meterMap: MeterMap);
 
     public int?[] CreateSourceIndices() => _tracks.Select(track => track.SourceIndex).ToArray();
 
     public void MarkSaved()
     {
         _savedRevision = _revision;
+        _savedTempoRevision = _tempoRevision;
+        _savedMeterMap = MeterMap;
         foreach (var track in _tracks)
             track.SavedNoteRevision = track.Document.Revision;
 
         Changed?.Invoke();
+    }
+
+    /// <summary>Replaces the tempo points as one edit, retaining the song's tick resolution.</summary>
+    public bool SetTempoChanges(IEnumerable<TempoChange> changes)
+    {
+        ArgumentNullException.ThrowIfNull(changes);
+        var map = new TempoMap(TempoMap.TicksPerQuarter, changes);
+        if (map.Changes.Any(change => change.MicrosecondsPerQuarterNote > 0xffffff))
+            throw new ArgumentOutOfRangeException(nameof(changes), "MIDI tempos must fit in three bytes.");
+        if (map.Changes.SequenceEqual(TempoMap.Changes))
+            return false;
+
+        _tempoUndo.Push((TempoMap, _tempoRevision));
+        TempoMap = map;
+        _tempoRevision = ++_nextTempoRevision;
+        Changed?.Invoke();
+        return true;
+    }
+
+    /// <summary>Sets the song tempo at a tick, or removes a later change when the tempo is null.</summary>
+    public bool EditTempoMarker(long tick, int? microseconds)
+    {
+        if (tick < 0 || microseconds is <= 0 or > 0xffffff || (tick == 0 && microseconds is null))
+            return false;
+
+        var changes = TempoMap.Changes.Where(change => change.Tick != tick);
+        if (microseconds is int tempo)
+            changes = changes.Append(new TempoChange(tick, tempo));
+        return SetTempoChanges(changes);
+    }
+
+    /// <summary>Moves one later tempo change to an unoccupied tick.</summary>
+    public bool MoveTempoMarker(long fromTick, long toTick)
+    {
+        if (fromTick <= 0 || toTick <= 0 || TempoMap.Changes.Any(change => change.Tick == toTick))
+            return false;
+
+        return SetTempoChanges(TempoMap.Changes.Select(change =>
+            change.Tick == fromTick ? change with { Tick = toTick } : change));
+    }
+
+    public bool UndoTempoEdit()
+    {
+        if (!_tempoUndo.TryPop(out var edit))
+            return false;
+
+        TempoMap = edit.Map;
+        _tempoRevision = edit.Revision;
+        Changed?.Invoke();
+        return true;
+    }
+
+    public bool SetMeterChanges(IEnumerable<MeterChange> changes)
+    {
+        var map = new MeterMap(TempoMap.TicksPerQuarter, changes);
+        if (map.Changes.Any(change => change.Meter.Denominator > 128))
+            throw new ArgumentOutOfRangeException(nameof(changes), "The MIDI file adapter supports beat units through 1/128.");
+        if (map.Changes.SequenceEqual(MeterMap.Changes))
+            return false;
+        _meterUndo.Push(MeterMap);
+        MeterMap = map;
+        Changed?.Invoke();
+        return true;
+    }
+
+    public bool UndoMeterEdit()
+    {
+        if (!_meterUndo.TryPop(out var previous))
+            return false;
+        MeterMap = previous;
+        Changed?.Invoke();
+        return true;
     }
 
     public EditableSongTrack AddInstrumentTrack()
@@ -193,7 +278,7 @@ public sealed class SongTrackEditor
         return track;
     }
 
-    private TrackSound GetChannelSound(byte channel)
+    public TrackSound GetChannelSound(byte channel)
     {
         int baseBank = channel == DrumChannel ? PercussionBank : 0;
         int bank = baseBank;

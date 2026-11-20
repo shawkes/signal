@@ -20,8 +20,7 @@ public sealed partial class PianoRollView
 
     private void RefreshSelection()
     {
-        int count = _document?.Notes.Count ?? 0;
-        NoteCountText.Text = count == 1 ? "1 note" : $"{count} notes";
+        RefreshNoteCount();
         AddButton.IsEnabled = _editingEnabled && _document is not null;
         CopyButton.IsEnabled = DeleteButton.IsEnabled = _editingEnabled && _selectedIds.Count > 0;
         PasteButton.IsEnabled = CanPaste;
@@ -39,7 +38,8 @@ public sealed partial class PianoRollView
 
     private string DescribeNote(SongNote note)
     {
-        string beat = $"{note.StartTick / TicksPerBar + 1}.{note.StartTick % TicksPerBar / _ticksPerBeat + 1}";
+        var position = _meterMap.PositionAt(note.StartTick);
+        string beat = $"{position.Bar}.{position.Beat}";
         return $"{Caption(note.NoteNumber, note.Channel == SongTrackEditor.DrumChannel)} · {beat} · {note.LengthTicks} ticks";
     }
 
@@ -86,7 +86,7 @@ public sealed partial class PianoRollView
 
     private void SurfacePointerPressed(object sender, PointerRoutedEventArgs args)
     {
-        if (!_editingEnabled || _document is null || _pointerId is not null || _rulerPointerId is not null)
+        if (!_editingEnabled || _document is null || _pointerId is not null || _rulerPointerId is not null || _tempoPointerId is not null)
             return;
         var point = args.GetCurrentPoint(Surface);
         if (!point.Properties.IsLeftButtonPressed || !IsWithinSurface(point.Position))
@@ -279,7 +279,7 @@ public sealed partial class PianoRollView
     private void EditorKeyDown(object sender, KeyRoutedEventArgs args)
     {
         if (!_editingEnabled || _document is null || _pointerId is not null || _rulerPointerId is not null ||
-            GridSizeBox.FocusState != FocusState.Unfocused)
+            _tempoPointerId is not null || _tempoMarkerFlyout is not null || GridSizeBox.FocusState != FocusState.Unfocused)
             return;
 
         bool control = IsDown(VirtualKey.Control);
@@ -354,7 +354,7 @@ public sealed partial class PianoRollView
 
     private void UpdateGrid()
     {
-        int cells = GridSizeBox.SelectedIndex is >= 0 and <= 3 ? 1 << GridSizeBox.SelectedIndex : DefaultCellsPerBeat;
+        int cells = GridSizeBox.SelectedIndex >= 0 ? 1 << GridSizeBox.SelectedIndex : DefaultCellsPerBeat;
         _cellsPerBeat = Math.Min(_ticksPerBeat, cells);
     }
 

@@ -43,6 +43,44 @@ public sealed class NotePlaybackTests
     }
 
     [Fact]
+    public void TransportMetronomeStaysSilentWhenIdleAndAfterPlaybackEnds()
+    {
+        var engine = Create();
+        engine.MetronomeEnabled = true;
+        Assert.All(Render(engine, 0, 32), sample => Assert.Equal(0f, sample));
+
+        // The song ends exactly at beat two even though its synth gets a release tail.
+        engine.PlayNotes([new(0, 480, 0, 60, 100)], SilentMonitorSynth.Instance);
+        var played = Render(engine, Origin, 24_032);
+        Assert.Equal(0.25f, played[0]);
+        Assert.All(played[48_000..], sample => Assert.Equal(0f, sample));
+        Assert.Null(engine.PlaybackTick);
+        Assert.All(Render(engine, 48_000, 32), sample => Assert.Equal(0f, sample));
+
+        engine.PlayNotes([new(0, 960, 0, 60, 100)], SilentMonitorSynth.Instance);
+        Assert.Equal(0.25f, Render(engine, 49_000, 32)[0]);
+        engine.StopPlayback();
+        Assert.All(Render(engine, 49_032, 32), sample => Assert.Equal(0f, sample));
+    }
+
+    [Fact]
+    public void SettingsPreviewAndSongRecordingUseIndependentMetronomeToggles()
+    {
+        var engine = Create();
+        engine.PreviewMetronomeEnabled = true;
+        Assert.Equal(0.25f, Render(engine, 0, 32)[0]);
+
+        var song = new Song(engine.TempoMap, []);
+        engine.RecordSong(song, SilentMonitorSynth.Instance, false, 0, timestamp: Origin);
+        Assert.All(Render(engine, Origin, 32), sample => Assert.Equal(0f, sample));
+        engine.MetronomeEnabled = true;
+        engine.PreviewMetronomeEnabled = false;
+        Assert.Equal(0.16f, Render(engine, Origin + 24_000, 32)[0]);
+        engine.StopSongRecording(timestamp: Origin + 48_000);
+        Assert.All(Render(engine, Origin + 48_000, 32), sample => Assert.Equal(0f, sample));
+    }
+
+    [Fact]
     public void StopsOnlyPlaybackAndLeavesLiveMidiSounding()
     {
         var engine = Create(new GateSynth(0.1f));
@@ -158,29 +196,42 @@ public sealed class NotePlaybackTests
     }
 
     [Fact]
-    public void PlaybackDoesNotAllocateInTheWarmAudioCallback()
+    public async Task PlaybackDoesNotAllocateInTheWarmAudioCallback()
     {
-        var engine = Create();
-        engine.MetronomeEnabled = true;
         var tempo = new TempoMap(240, [new(0, 500_000), new(240, 1_000_000)]);
         var notes = Enumerable.Range(0, 480).Select(i => new SongNote(i * 2, 1, 0, 60, 100));
-        engine.PlaySong(new Song(tempo, [new SongTrack("Track", notes)]), new GateSynth(0.2f));
+        var meters = new MeterMap(240, [new(0, new(3, 4)), new(150, new(5, 8)), new(237, new(7, 16))]);
+        var song = new Song(tempo, [new SongTrack("Track", notes)], meterMap: meters);
         var output = new float[256];
-        for (int i = 0; i < 100; i++)
+        // Both passes cross the meter markers at frames 15,000 and 23,700 and the tempo
+        // change at 24,000. Preparing a fresh plan keeps the second pass on the same events.
+        var warmup = PrepareEngine();
+        var engine = PrepareEngine();
+        long allocated = await Task.Factory.StartNew(() =>
         {
-            long frame = Origin + i * 128;
-            engine.Render(output, frame, new AudioClockAnchor(frame, frame));
-        }
-
-        long before = GC.GetAllocatedBytesForCurrentThread();
-        for (int i = 100; i < 200; i++)
-        {
-            long frame = Origin + i * 128;
-            engine.Render(output, frame, new AudioClockAnchor(frame, frame));
-        }
-        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
-
+            RenderThroughChanges(warmup);
+            long before = GC.GetAllocatedBytesForCurrentThread();
+            RenderThroughChanges(engine);
+            return GC.GetAllocatedBytesForCurrentThread() - before;
+        }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
         Assert.Equal(0, allocated);
+
+        LatencyEngine PrepareEngine()
+        {
+            var prepared = Create();
+            prepared.MetronomeEnabled = true;
+            prepared.PlaySong(song, new GateSynth(0.2f));
+            return prepared;
+        }
+
+        void RenderThroughChanges(LatencyEngine target)
+        {
+            for (int block = 0; block < 200; block++)
+            {
+                long frame = Origin + block * 128;
+                target.Render(output, frame, new AudioClockAnchor(frame, frame));
+            }
+        }
     }
 
     [Fact]

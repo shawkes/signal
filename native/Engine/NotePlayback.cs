@@ -1,10 +1,10 @@
 namespace Signal.Native.Engine;
 
 internal delegate void MetronomeMixer(
-    Span<float> output, long firstFrame, TempoMap tempo, SongMeter meter, long firstAllowedOnset);
+    Span<float> output, long firstFrame, TempoMap tempo, MeterMap meterMap, long firstAllowedOnset);
 
 /// <summary>Plays a prepared snapshot on the audio thread without changing live MIDI state.</summary>
-internal sealed class NotePlayback(int sampleRate)
+internal sealed class NotePlayback(int sampleRate, MeterMap liveMeter)
 {
     private const long Finished = -1;
     private const int Channels = 16;
@@ -34,7 +34,7 @@ internal sealed class NotePlayback(int sampleRate)
     }
 
     public PlaybackPlan? Prepare(IEnumerable<SongNote> notes, IEnumerable<SongChannelMessage> messages,
-        TempoMap tempo, IMonitorSynth synth, long endTick = 0, LoopRange? loop = null, SongMeter? meter = null,
+        TempoMap tempo, IMonitorSynth synth, long endTick = 0, LoopRange? loop = null, MeterMap? meterMap = null,
         bool allowEmpty = false)
     {
         ArgumentNullException.ThrowIfNull(notes);
@@ -81,7 +81,7 @@ internal sealed class NotePlayback(int sampleRate)
         MergeOverlappingReleases(events);
         long endFrame = Math.Max(events.Count == 0 ? 0 : events[^1].Frame, tempo.TickToSample(endTick, sampleRate));
         long endWithRelease = checked(endFrame + sampleRate);
-        var plan = new PlaybackPlan(synth, tempo, meter ?? SongMeter.CommonTime, events.ToArray(), endFrame, endWithRelease);
+        var plan = new PlaybackPlan(synth, tempo, meterMap ?? liveMeter, events.ToArray(), endFrame, endWithRelease);
         if (loop is { } range)
         {
             plan.RequestedLoop = PrepareLoop(plan, range);
@@ -113,7 +113,8 @@ internal sealed class NotePlayback(int sampleRate)
 
     public void Stop() => Volatile.Write(ref _requested, null);
 
-    public void Render(Span<float> output, long firstFrame, TempoMap liveTempo, MetronomeMixer? mixMetronome)
+    public void Render(Span<float> output, long firstFrame, TempoMap liveTempo, MetronomeMixer? mixMetronome,
+        MetronomeMixer? mixPreview = null)
     {
         var requested = Volatile.Read(ref _requested);
         bool restarting = !ReferenceEquals(requested, _active);
@@ -142,7 +143,7 @@ internal sealed class NotePlayback(int sampleRate)
 
         if (_active is not { } active)
         {
-            mixMetronome?.Invoke(output, firstFrame, liveTempo, SongMeter.CommonTime, 0);
+            mixPreview?.Invoke(output, firstFrame, liveTempo, liveMeter, 0);
             return;
         }
 
@@ -153,7 +154,7 @@ internal sealed class NotePlayback(int sampleRate)
         if (_loop is { } loop)
             RenderLoop(output, firstFrame, active, loop, mixMetronome);
         else
-            RenderSong(output, firstFrame, active, liveTempo, mixMetronome);
+            RenderSong(output, firstFrame, active, mixMetronome);
     }
 
     private void ApplyLoopChange(PlaybackPlan active, long firstFrame, bool restarting)
@@ -198,7 +199,7 @@ internal sealed class NotePlayback(int sampleRate)
             RenderEvents(active.Synth, loop.Events, segment, position, loop.EndFrame, fade);
             if (active.Overdub is { } overdub && active.OriginFrame is long origin)
                 overdub.Render(segment, (firstFrame - origin) / loop.Length, position);
-            mixMetronome?.Invoke(segment, position, active.TempoMap, active.Meter,
+            mixMetronome?.Invoke(segment, position, active.TempoMap, active.MeterMap,
                 Math.Max(loop.StartFrame, _firstAllowedOnset));
 
             firstFrame += frames;
@@ -220,23 +221,20 @@ internal sealed class NotePlayback(int sampleRate)
         _nextEvent = 0;
     }
 
-    private void RenderSong(Span<float> output, long firstFrame, PlaybackPlan active, TempoMap liveTempo,
+    private void RenderSong(Span<float> output, long firstFrame, PlaybackPlan active,
         MetronomeMixer? mixMetronome)
     {
         long relativeFirst = firstFrame - _startFrame;
         long relativeEnd = Math.Min(relativeFirst + output.Length / 2, active.EndWithRelease);
-        bool onSongGrid = _nextEvent < active.Events.Length || relativeFirst < active.EndFrame;
         if (relativeFirst < relativeEnd)
         {
             int length = (int)((relativeEnd - relativeFirst) * 2);
             RenderEvents(active.Synth, active.Events, output[..length], relativeFirst, active.EndWithRelease, _fadeFrames);
         }
-        if (mixMetronome is not null)
+        if (mixMetronome is not null && relativeFirst < active.EndFrame)
         {
-            if (onSongGrid)
-                mixMetronome(output, relativeFirst, active.TempoMap, active.Meter, _firstAllowedOnset);
-            else
-                mixMetronome(output, firstFrame, liveTempo, SongMeter.CommonTime, 0);
+            int clickFrames = (int)Math.Min(output.Length / 2, active.EndFrame - relativeFirst);
+            mixMetronome(output[..(2 * clickFrames)], relativeFirst, active.TempoMap, active.MeterMap, _firstAllowedOnset);
         }
 
         long tick = _nextEvent == active.Events.Length && relativeEnd >= active.EndFrame
@@ -397,11 +395,11 @@ internal sealed class NotePlayback(int sampleRate)
     }
 
     internal sealed class PlaybackPlan(
-        IMonitorSynth synth, TempoMap tempoMap, SongMeter meter, PlaybackEvent[] events, long endFrame, long endWithRelease)
+        IMonitorSynth synth, TempoMap tempoMap, MeterMap meterMap, PlaybackEvent[] events, long endFrame, long endWithRelease)
     {
         public IMonitorSynth Synth { get; } = synth;
         public TempoMap TempoMap { get; } = tempoMap;
-        public SongMeter Meter { get; } = meter;
+        public MeterMap MeterMap { get; } = meterMap;
         public PlaybackEvent[] Events { get; } = events;
         public long EndFrame { get; } = endFrame;
         public long EndWithRelease { get; } = endWithRelease;

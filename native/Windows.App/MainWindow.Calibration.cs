@@ -15,7 +15,6 @@ public sealed partial class MainWindow
     private TapTimingTest? _tapTest;
     private string _tapInputLabel = "";
     private bool _metronomeBeforeTapTest;
-    private bool _estimateApplied;
 
     private void CalibrationInputChanged(object sender, SelectionChangedEventArgs args)
     {
@@ -40,11 +39,10 @@ public sealed partial class MainWindow
             return;
 
         _tapTest = new TapTimingTest();
-        _estimateApplied = false;
         _tapInputLabel = input == SpaceTapInput ? "Space key" : "MIDI keyboard";
         _metronomeBeforeTapTest = MetronomeSwitch.IsOn;
         Volatile.Write(ref _activeTapInput, input);
-        engine.SetSynth(SilentMonitorSynth.Instance);
+        ConfigureLiveMidi(engine, muted: true);
         engine.RequestMidiReset();
         BeginTake(engine.SetRecording(true, 0), CapturePurpose.Calibration);
         MetronomeSwitch.IsOn = true;
@@ -83,9 +81,7 @@ public sealed partial class MainWindow
     {
         if (!CaptureInProgress && _tapTest?.OffsetMilliseconds is { } offset)
         {
-            OffsetBox.Value = Math.Round(offset, 1, MidpointRounding.AwayFromZero);
-            _estimateApplied = true;
-            UpdateCalibrationControls();
+            ApplyRecordingOffset(RoundRecordingOffset(offset));
         }
     }
 
@@ -97,7 +93,8 @@ public sealed partial class MainWindow
         CalibrationInputBox.IsEnabled = !CaptureInProgress && !_fileBusy;
         CalibrationButton.IsEnabled = canStart || (audioReady && CalibrationInProgress && _recording);
         CalibrationButton.Content = CalibrationInProgress ? "Stop tap test" : "Start tap test";
-        ApplyCalibrationButton.IsEnabled = !CaptureInProgress && !_fileBusy && !_estimateApplied &&
+        bool offsetMatches = _tapTest?.OffsetMilliseconds is { } value && IsSavedOffset(RoundRecordingOffset(value));
+        ApplyCalibrationButton.IsEnabled = !CaptureInProgress && !_fileBusy && !offsetMatches &&
             _tapTest?.OffsetMilliseconds is not null;
 
         if (CalibrationInProgress && _tapTest is { } active)
@@ -108,9 +105,10 @@ public sealed partial class MainWindow
         }
         else if (_tapTest?.OffsetMilliseconds is { } estimate)
         {
-            string applied = _estimateApplied ? " · Applied to recording offset" : "";
+            string recommendation = offsetMatches ? "Saved recording offset" : "Suggested recording offset";
             CalibrationStatusText.Text =
-                $"{_tapInputLabel} estimate {estimate:+0.0;-0.0;0.0} ms · {_tapTest.MeasuredTaps} taps{applied}";
+                $"The median tap landed {DescribeBeatTiming(estimate)} ({_tapTest.MeasuredTaps} taps, {_tapInputLabel}). " +
+                $"{recommendation} {estimate:+0.0;-0.0;0.0} ms.";
         }
         else if (_tapTest is not null)
         {

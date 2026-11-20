@@ -9,6 +9,95 @@ public sealed class CountInTransportTests
     private const long Origin = 10_000;
     private const float BackingLevel = 0.2f;
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void SongPlaybackAndRecordingAccentTheNewBarAtAMidBeatMeterChange(bool recording)
+    {
+        var engine = CreateEngine();
+        engine.MetronomeEnabled = true;
+        var song = CreateMeterChangeSong();
+        if (recording)
+            engine.RecordSong(song, SilentMonitorSynth.Instance, false, 0, timestamp: Origin);
+        else
+            Assert.True(engine.PlaySong(song, SilentMonitorSynth.Instance));
+
+        var samples = Render(engine, Origin, 1_800);
+        Assert.Equal(0.25f, samples[0]);
+        Assert.Equal(0.25f, samples[250 * 2]); // The 5/8 marker falls halfway through the first quarter.
+        foreach (int frame in new[] { 500, 750, 1_000, 1_375 })
+            Assert.Equal(0.16f, samples[frame * 2]);
+        Assert.Equal(0f, samples[1_500 * 2]);
+        Assert.Equal(0.25f, samples[1_750 * 2]);
+    }
+
+    [Fact]
+    public void LoopCountInUsesTheSignatureAndTempoAtItsStartAndKeepsSongBeatPhase()
+    {
+        var engine = CreateEngine();
+        engine.MetronomeEnabled = true;
+        engine.RecordSong(CreateMeterChangeSong(), SilentMonitorSynth.Instance, true, 0, timestamp: Origin,
+            loop: new LoopRange(300, 480));
+        Assert.Equal(5, engine.CountInBeatsRemaining);
+
+        var count = Render(engine, Origin, 1_875);
+        Assert.Equal(0.25f, count[0]);
+        foreach (int frame in new[] { 375, 750, 1_125, 1_500 })
+            Assert.Equal(0.16f, count[2 * frame]);
+        var playback = Render(engine, Origin + 1_875, 2_250);
+        Assert.Null(engine.CountInBeatsRemaining);
+        for (int pass = 0; pass < 2; pass++)
+        {
+            int first = pass * 1_125;
+            Assert.Equal(0.16f, playback[2 * first]); // The loop starts on beat five of the 5/8 bar.
+            Assert.Equal(0.25f, playback[2 * (first + 375)]);
+            Assert.Equal(0.16f, playback[2 * (first + 750)]);
+        }
+    }
+
+    [Fact]
+    public void LoopRepeatsMeterAndTempoChangesAcrossAudioBuffers()
+    {
+        var engine = CreateEngine();
+        engine.MetronomeEnabled = true;
+        Assert.True(engine.PlaySong(CreateMeterChangeSong(), SilentMonitorSynth.Instance, new LoopRange(0, 480)));
+
+        var firstPass = Render(engine, Origin, 2_500);
+        var secondPass = Render(engine, Origin + 2_500, 253)
+            .Concat(Render(engine, Origin + 2_753, 1_499))
+            .Concat(Render(engine, Origin + 4_252, 748));
+        Assert.Equal(firstPass, secondPass);
+        Assert.Equal(0.25f, firstPass[250 * 2]);
+        Assert.Equal(0.16f, firstPass[1_375 * 2]);
+        Assert.Equal(0.25f, firstPass[1_750 * 2]);
+    }
+
+    private static Song CreateMeterChangeSong()
+    {
+        var tempo = new TempoMap(120, [new(0, 500_000), new(240, 750_000)]);
+        var meter = new MeterMap(120, [new(0, new(3, 4)), new(60, new(5, 8))]);
+        return new Song(tempo, [new SongTrack("Backing", [new(0, 960, 0, 60, 90)])], meterMap: meter);
+    }
+
+    [Fact]
+    public void ASignatureInsideThePreviousClickDecayRestartsTheAccentAtItsRoundedSample()
+    {
+        // Two ticks per millisecond. Tick 1 lands on frame 1 and ticks 3 and 4 share frame 2.
+        var tempo = TempoMap.Constant(120, 1_000);
+        var meter = new MeterMap(1_000, [
+            new(0, new(3, 4)), new(1, new(4, 4)), new(3, new(7, 8)), new(4, new(2, 8))]);
+        var song = new Song(tempo, [new SongTrack("Backing", [new(0, 2_000, 0, 60, 90)])], meterMap: meter);
+        var engine = CreateEngine();
+        engine.MetronomeEnabled = true;
+        Assert.True(engine.PlaySong(song, SilentMonitorSynth.Instance));
+        var audio = Render(engine, Origin, 503);
+        Assert.Equal(0.25f, audio[0]);
+        Assert.Equal(0.25f, audio[2]);
+        Assert.Equal(0.25f, audio[4]);
+        Assert.Equal(0.16f, audio[252 * 2]);
+        Assert.Equal(0.25f, audio[502 * 2]);
+    }
+
     [Fact]
     public void ThreeBeatCountInStartsBackingAtBarOneEvenWithMetronomeOff()
     {

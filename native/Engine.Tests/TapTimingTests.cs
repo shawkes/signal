@@ -37,7 +37,7 @@ public sealed class TapTimingTests
         const int knownOffset = 12;
         var engine = new LatencyEngine(rate, SilentMonitorSynth.Instance, timestampFrequency: rate)
         {
-            MetronomeEnabled = true
+            PreviewMetronomeEnabled = true
         };
         long take = engine.SetRecording(true, 0, timestamp: 0);
         int totalTaps = TapTimingTest.PracticeTaps + TapTimingTest.TargetTaps;

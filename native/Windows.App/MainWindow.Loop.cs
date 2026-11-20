@@ -40,7 +40,7 @@ public sealed partial class MainWindow
     }
 
     private LoopRange? EnabledLoopRange(LoopRange? range, bool enabled, long endTick) =>
-        enabled ? range ?? new LoopRange(0, endTick > 0 ? endTick : SongTempo.TicksPerQuarter) : null;
+        enabled ? range ?? new LoopRange(0, endTick > 0 ? endTick : _trackEditor.MeterMap.NextBarTick(0)) : null;
 
     private void UpdateLoopDisplay()
     {
@@ -60,7 +60,7 @@ public sealed partial class MainWindow
 
     private string BeatLabel(long tick)
     {
-        long beat = tick / SongTempo.TicksPerQuarter;
-        return $"{beat / 4 + 1}.{beat % 4 + 1}";
+        var position = _trackEditor.MeterMap.PositionAt(tick);
+        return $"{position.Bar}.{position.Beat}";
     }
 }

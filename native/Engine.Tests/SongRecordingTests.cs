@@ -53,6 +53,27 @@ public sealed class SongRecordingTests
         Assert.Equal(9_600, note.PlayedLengthFrames);
     }
 
+    [Theory]
+    [InlineData(101, 32, 25, 21)]
+    [InlineData(101, 64, 19, 21)]
+    [InlineData(7, 64, 1, 2)]
+    public void FineGridsUseRepresentableMidiTicksAndPreserveThePlayedDuration(
+        int ticksPerQuarter, int division, long expectedTick, long expectedLength)
+    {
+        var song = new Song(TempoMap.Constant(120, ticksPerQuarter), [new SongTrack("Piano", [])]);
+        var engine = NewEngine();
+        engine.RecordSong(song, SilentMonitorSynth.Instance, countIn: false, offsetMilliseconds: 10,
+            quantizationDivision: division, timestamp: Timestamp(FirstFrame));
+        long attack = FirstFrame + 5_100;
+        EnqueueNote(engine, 60, attack, attack + 4_800);
+        RenderThrough(engine, attack + 4_800);
+
+        Assert.True(engine.TryReadNote(out var note));
+        Assert.Equal(expectedTick, note.StartTick);
+        Assert.Equal(expectedLength, note.LengthTicks);
+        Assert.Equal(4_800, note.PlayedLengthFrames);
+    }
+
     private static LatencyEngine NewEngine() =>
         new(SampleRate, SilentMonitorSynth.Instance, timestampFrequency: SampleRate);
 

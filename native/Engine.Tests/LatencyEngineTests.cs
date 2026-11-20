@@ -36,27 +36,52 @@ public class LatencyEngineTests
         Assert.Equal(msFromBeat, note.MillisecondsFromBeat);
     }
 
-    [Fact]
-    public void QuantizesAfterCompensationAndPreservesPlayedLength()
+    [Theory]
+    [InlineData(8, 18_240, 240)]
+    [InlineData(32, 4_950, 60)]
+    [InlineData(64, 4_950, 90)]
+    public void QuantizesAfterCompensationAndPreservesPlayedLength(int division, long attack, long expectedTick)
     {
         var engine = NewEngine(SilentMonitorSynth.Instance);
-        engine.SetRecording(true, 10, quantizationDivision: 8, timestamp: Timestamp(0));
-        Assert.True(engine.TryEnqueue(new MidiMessage(Timestamp(18_240), 0x90, 60, 100)));
-        Assert.True(engine.TryEnqueue(new MidiMessage(Timestamp(21_840), 0x80, 60, 0)));
+        engine.SetRecording(true, 10, quantizationDivision: division, timestamp: Timestamp(0));
+        Assert.True(engine.TryEnqueue(new MidiMessage(Timestamp(attack), 0x90, 60, 100)));
+        Assert.True(engine.TryEnqueue(new MidiMessage(Timestamp(attack + 3_600), 0x80, 60, 0)));
         Render(engine, firstFrame: 23_000, frames: 128);
 
         Assert.True(engine.TryReadNote(out var note));
-        Assert.Equal(17_760, note.CompensatedFrame);
-        Assert.Equal(240, note.StartTick);
+        Assert.Equal(attack - 480, note.CompensatedFrame);
+        Assert.Equal(expectedTick, note.StartTick);
         Assert.Equal(72, note.LengthTicks);
         Assert.Equal(3_600, note.PlayedLengthFrames);
+    }
+
+    [Theory]
+    [InlineData(0, 0, 470)]
+    [InlineData(10, 8, 480)]
+    public void MeasuresLiveAttackDelayIndependentlyOfBeatOffsetAndQuantization(
+        double offsetMs, int quantization, long expectedStartTick)
+    {
+        var engine = NewEngine(new GateSynth());
+        engine.SetRecording(true, offsetMs, quantization, Timestamp(0));
+        Assert.True(engine.TryEnqueue(new MidiMessage(Timestamp(23_520), 0x90, 60, 100)));
+        // Receipt falls 10 ms before the beat. The next writable sample is 3 ms after receipt.
+        Assert.All(Render(engine, firstFrame: 23_664, frames: 64), sample => Assert.Equal(0.1f, sample));
+        Assert.True(engine.TryEnqueue(new MidiMessage(Timestamp(24_000), 0x80, 60, 0)));
+        // The note-off waits 12.5 ms for this callback. The reading still belongs to the attack.
+        Assert.All(Render(engine, firstFrame: 24_600, frames: 64), sample => Assert.Equal(0f, sample));
+
+        Assert.True(engine.TryReadNote(out var note));
+        Assert.Equal(3.0, note.MonitorDelayMilliseconds);
+        Assert.Equal(-10.0, note.RawMillisecondsFromBeat);
+        Assert.Equal(-10.0 - offsetMs, note.MillisecondsFromBeat);
+        Assert.Equal(expectedStartTick, note.StartTick);
     }
 
     [Fact]
     public void SynthAndClickStartAtTheSameSampleWhenMidiIsOnTheBeat()
     {
         var engine = NewEngine(new GateSynth());
-        engine.MetronomeEnabled = true;
+        engine.PreviewMetronomeEnabled = true;
         Assert.True(engine.TryEnqueue(new MidiMessage(Timestamp(24_000), 0x90, 60, 100)));
 
         var output = Render(engine, firstFrame: 23_998, frames: 4);
@@ -70,11 +95,14 @@ public class LatencyEngineTests
     public void HoldsFutureMidiAndRendersEarlierTimestampsFirst()
     {
         var engine = NewEngine(new GateSynth());
+        engine.SetRecording(true, 0, timestamp: Timestamp(0));
         Assert.True(engine.TryEnqueue(new MidiMessage(Timestamp(24_002), 0x80, 60, 0)));
         Assert.True(engine.TryEnqueue(new MidiMessage(Timestamp(24_000), 0x90, 60, 100)));
 
         Assert.Equal(new float[] { 0, 0, 0.1f, 0.1f }, Render(engine, firstFrame: 23_999, frames: 2));
         Assert.Equal(new float[] { 0.1f, 0.1f, 0, 0 }, Render(engine, firstFrame: 24_001, frames: 2));
+        Assert.True(engine.TryReadNote(out var note));
+        Assert.Equal(0.0, note.MonitorDelayMilliseconds);
     }
 
     [Fact]
@@ -102,7 +130,7 @@ public class LatencyEngineTests
     public void AllocatesNoManagedMemoryDuringWarmRendering()
     {
         var engine = NewEngine(new GateSynth());
-        engine.MetronomeEnabled = true;
+        engine.PreviewMetronomeEnabled = true;
         engine.SetRecording(true, 10, timestamp: Timestamp(0));
         var output = new float[256];
         for (var i = 0; i < 300; i++)

@@ -5,7 +5,38 @@
     xmlns:local="using:Signal.Native.Windows.App"
     xmlns:roll="using:Signal.Native.Windows.App.PianoRoll">
     <TabView x:Name="WorkspaceTabs" Padding="0,8,0,0" TabWidthMode="SizeToContent"
-             IsAddTabButtonVisible="False" CanReorderTabs="False" SelectedIndex="0">
+             IsAddTabButtonVisible="False" CanReorderTabs="False" SelectedIndex="0"
+             SelectionChanged="WorkspaceTabChanged">
+        <TabView.TabStripHeader>
+            <MenuBar VerticalAlignment="Center">
+                <MenuBarItem Title="File" AccessKey="F">
+                    <MenuFlyoutItem x:Name="NewSongMenuItem" Text="New" Click="NewSongClicked" AccessKey="N">
+                        <MenuFlyoutItem.KeyboardAccelerators>
+                            <KeyboardAccelerator Key="N" Modifiers="Control" />
+                        </MenuFlyoutItem.KeyboardAccelerators>
+                    </MenuFlyoutItem>
+                    <MenuFlyoutItem x:Name="OpenSongButton" Text="Open MIDI…" Click="OpenSongClicked" AccessKey="O">
+                        <MenuFlyoutItem.KeyboardAccelerators>
+                            <KeyboardAccelerator Key="O" Modifiers="Control" />
+                        </MenuFlyoutItem.KeyboardAccelerators>
+                    </MenuFlyoutItem>
+                    <MenuFlyoutSeparator />
+                    <MenuFlyoutItem x:Name="SaveSongButton" Text="Save" Click="SaveSongClicked" AccessKey="S">
+                        <MenuFlyoutItem.KeyboardAccelerators>
+                            <KeyboardAccelerator Key="S" Modifiers="Control" />
+                        </MenuFlyoutItem.KeyboardAccelerators>
+                    </MenuFlyoutItem>
+                    <MenuFlyoutItem x:Name="SaveSongAsButton" Text="Save as…" Click="SaveSongAsClicked" AccessKey="A">
+                        <MenuFlyoutItem.KeyboardAccelerators>
+                            <KeyboardAccelerator Key="S" Modifiers="Control,Shift" />
+                        </MenuFlyoutItem.KeyboardAccelerators>
+                    </MenuFlyoutItem>
+                </MenuBarItem>
+                <MenuBarItem Title="View" AccessKey="V">
+                    <MenuFlyoutItem Text="MIDI monitor…" Click="OpenMidiMonitorClicked" />
+                </MenuBarItem>
+            </MenuBar>
+        </TabView.TabStripHeader>
         <TabViewItem x:Name="PianoRollTab" Header="Piano roll" IsClosable="False">
             <Grid Padding="20,16,20,20" RowSpacing="12">
                 <Grid.RowDefinitions>
@@ -19,11 +50,8 @@
                         <ColumnDefinition Width="Auto" />
                         <ColumnDefinition Width="*" />
                     </Grid.ColumnDefinitions>
-                    <StackPanel Orientation="Horizontal" Spacing="8">
-                        <Button x:Name="OpenSongButton" Content="Open MIDI…" Click="OpenSongClicked" />
-                        <Button x:Name="SaveSongButton" Content="Save" Click="SaveSongClicked" />
-                        <Button x:Name="SaveSongAsButton" Content="Save as…" Click="SaveSongAsClicked" />
-                    </StackPanel>
+                    <Button x:Name="TempoChangesButton" Content="Tempo changes…" Click="TempoChangesClicked"
+                            ToolTipService.ToolTip="Edit the song's tempo changes" />
                     <TextBlock x:Name="SongNameText" Grid.Column="1" VerticalAlignment="Center"
                                TextTrimming="CharacterEllipsis" Style="{StaticResource BodyStrongTextBlockStyle}" />
                 </Grid>
@@ -59,7 +87,8 @@
                                       AutomationProperties.Name="Loop playback"
                                       ToolTipService.ToolTip="Repeat the highlighted range or the whole song" />
                         <ToggleButton x:Name="SongMetronomeButton" Content="Metronome"
-                                      Click="SongMetronomeClicked" IsEnabled="False" />
+                                      Click="SongMetronomeClicked" IsEnabled="False"
+                                      ToolTipService.ToolTip="Click during song playback or recording" />
                     </StackPanel>
                     <Grid Grid.Column="1" VerticalAlignment="Center" ColumnSpacing="8">
                         <Grid.ColumnDefinitions>
@@ -77,8 +106,12 @@
                                 Click="ClearLoopRangeClicked" Visibility="Collapsed"
                                 ToolTipService.ToolTip="Use the whole song for looping" />
                     </Grid>
-                    <TextBlock x:Name="SongTempoText" Grid.Column="2" VerticalAlignment="Center"
-                               Style="{StaticResource BodyStrongTextBlockStyle}" />
+                    <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                        <TextBlock x:Name="SongTempoText" VerticalAlignment="Center"
+                                   Style="{StaticResource BodyStrongTextBlockStyle}" />
+                        <Button x:Name="MeterButton" Click="MeterClicked" ToolTipService.ToolTip="Edit time signatures"
+                                Padding="10,4" />
+                    </StackPanel>
                 </Grid>
                 <Grid Grid.Row="3" ColumnSpacing="14">
                     <Grid.ColumnDefinitions>
@@ -129,6 +162,12 @@
                                 <TextBlock x:Name="TrackChannelText" Style="{StaticResource BodyStrongTextBlockStyle}" />
                                 <ComboBox x:Name="TrackSoundBox" Header="Sound" HorizontalAlignment="Stretch"
                                           SelectionChanged="TrackSoundChanged" />
+                                <ComboBox x:Name="MidiRoutingBox" Header="MIDI input routing" SelectedIndex="0"
+                                          HorizontalAlignment="Stretch" SelectionChanged="MidiRoutingChanged"
+                                          ToolTipService.ToolTip="Selected track plays the highlighted track. Multi matches the incoming MIDI channel.">
+                                    <ComboBoxItem Content="Selected track" />
+                                    <ComboBoxItem Content="Multi" />
+                                </ComboBox>
                                 <TextBlock x:Name="TrackChannelHint" TextWrapping="Wrap" Visibility="Collapsed"
                                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                            Style="{StaticResource CaptionTextBlockStyle}" />
@@ -143,8 +182,9 @@
                 </Grid>
             </Grid>
         </TabViewItem>
-        <TabViewItem Header="Recording settings" IsClosable="False">
-            <ScrollViewer>
+        <TabViewItem x:Name="RecordingSettingsTab" Header="Recording settings" IsClosable="False">
+            <ScrollViewer x:Name="RecordingSettingsScroll" HorizontalContentAlignment="Stretch"
+                          HorizontalScrollMode="Disabled" HorizontalScrollBarVisibility="Disabled">
                 <StackPanel Padding="24" Spacing="18" MaxWidth="920"
                             PreviewKeyDown="CalibrationKeyDown" PreviewKeyUp="CalibrationKeyUp">
                     <TextBlock Text="Recording settings" Style="{StaticResource TitleTextBlockStyle}" />
@@ -177,9 +217,42 @@
                             </Grid>
                             <TextBlock x:Name="AudioFormatText" Text="Starting audio…" TextWrapping="Wrap"
                                        Style="{StaticResource CaptionTextBlockStyle}" />
-                            <TextBlock x:Name="AudioCountersText" TextWrapping="Wrap"
-                                       Style="{StaticResource CaptionTextBlockStyle}" />
+                            <Grid x:Name="DiagnosticsGrid" ColumnSpacing="8" RowSpacing="2">
+                                <Grid.Resources>
+                                    <Style x:Key="CounterLabel" TargetType="TextBlock" BasedOn="{StaticResource CaptionTextBlockStyle}">
+                                        <Setter Property="TextWrapping" Value="Wrap" />
+                                    </Style>
+                                    <Style x:Key="CounterValue" TargetType="TextBlock" BasedOn="{StaticResource BodyStrongTextBlockStyle}">
+                                        <Setter Property="Typography.NumeralAlignment" Value="Tabular" />
+                                        <Setter Property="TextWrapping" Value="NoWrap" />
+                                        <Setter Property="ToolTipService.ToolTip" Value="{Binding Text, RelativeSource={RelativeSource Self}}" />
+                                    </Style>
+                                </Grid.Resources>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+                                <TextBlock Text="Render passes" Style="{StaticResource CounterLabel}" />
+                                <TextBlock x:Name="RenderPassesValue" Grid.Row="1" Text="—" Style="{StaticResource CounterValue}" />
+                                <TextBlock Text="Estimated underruns" Grid.Column="1" Style="{StaticResource CounterLabel}" />
+                                <TextBlock x:Name="UnderrunsValue" Grid.Row="1" Grid.Column="1" Text="—" Style="{StaticResource CounterValue}" />
+                                <TextBlock Text="Clock failures" Grid.Column="2" Style="{StaticResource CounterLabel}" />
+                                <TextBlock x:Name="ClockFailuresValue" Grid.Row="1" Grid.Column="2" Text="—" Style="{StaticResource CounterValue}" />
+                                <TextBlock Text="MIDI drops" Grid.Column="3" Style="{StaticResource CounterLabel}" />
+                                <TextBlock x:Name="MidiDropsValue" Grid.Row="1" Grid.Column="3" Text="—" Style="{StaticResource CounterValue}" />
+                                <TextBlock Text="Capture drops" Grid.Column="4" Style="{StaticResource CounterLabel}" />
+                                <TextBlock x:Name="CaptureDropsValue" Grid.Row="1" Grid.Column="4" Text="—" Style="{StaticResource CounterValue}" />
+                            </Grid>
                             <TextBlock x:Name="MidiErrorText" TextWrapping="Wrap" Visibility="Collapsed"
+                                       Style="{StaticResource CaptionTextBlockStyle}" />
+                            <TextBlock x:Name="PreferenceErrorText" TextWrapping="Wrap" Visibility="Collapsed"
                                        Style="{StaticResource CaptionTextBlockStyle}" />
                         </StackPanel>
                     </Border>
@@ -201,8 +274,8 @@
                             BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1"
                             CornerRadius="8" Padding="16">
                         <StackPanel Spacing="10">
-                            <TextBlock Text="Tap-to-beat latency test" Style="{StaticResource SubtitleTextBlockStyle}" />
-                            <TextBlock Text="Tap once per metronome click. The first two taps are practice."
+                            <TextBlock Text="Recording offset calibration" Style="{StaticResource SubtitleTextBlockStyle}" />
+                            <TextBlock Text="Tap once per click to estimate an offset for the input you record with. The first two taps are practice."
                                        TextWrapping="Wrap" />
                             <StackPanel Orientation="Horizontal" Spacing="10">
                                 <ComboBox x:Name="CalibrationInputBox" SelectedIndex="1" MinWidth="145"
@@ -212,7 +285,7 @@
                                 </ComboBox>
                                 <Button x:Name="CalibrationButton" Content="Start tap test" IsEnabled="False"
                                         Click="CalibrationClicked" />
-                                <Button x:Name="ApplyCalibrationButton" Content="Use estimate" IsEnabled="False"
+                                <Button x:Name="ApplyCalibrationButton" Content="Apply offset" IsEnabled="False"
                                         Click="ApplyCalibrationClicked" />
                             </StackPanel>
                             <TextBlock x:Name="CalibrationStatusText" TextWrapping="Wrap"
@@ -224,6 +297,9 @@
                             BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1"
                             CornerRadius="8" Padding="16">
                         <StackPanel Spacing="12">
+                            <TextBlock Text="Recording test" Style="{StaticResource SubtitleTextBlockStyle}" />
+                            <TextBlock Text="Play freely to measure monitoring latency. For a suggested recording offset, play one note per click for at least six clicks."
+                                       TextWrapping="Wrap" />
                             <Grid ColumnSpacing="12">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*" />
@@ -234,6 +310,7 @@
                                               Toggled="MetronomeToggled" IsEnabled="False" />
                                 <NumberBox x:Name="OffsetBox" Grid.Column="1" Header="Recording offset (ms)"
                                            Value="10" Minimum="-500" Maximum="500" SmallChange="1"
+                                           ValueChanged="RecordingOffsetChanged"
                                            SpinButtonPlacementMode="Inline"
                                            ToolTipService.ToolTip="Positive values place recorded notes earlier." />
                                 <ComboBox x:Name="QuantizeBox" Grid.Column="2" Header="Quantize" SelectedIndex="0"
@@ -242,13 +319,26 @@
                                     <ComboBoxItem Content="1/4" />
                                     <ComboBoxItem Content="1/8" />
                                     <ComboBoxItem Content="1/16" />
+                                    <ComboBoxItem Content="1/32" />
+                                    <ComboBoxItem Content="1/64" />
                                 </ComboBox>
                             </Grid>
                             <StackPanel Orientation="Horizontal" Spacing="12">
                                 <Button x:Name="RecordButton" Content="Record test" Click="RecordClicked" IsEnabled="False"
                                         Style="{StaticResource AccentButtonStyle}" />
                                 <Button x:Name="ShowTakeButton" Content="Show in piano roll" Click="ShowTakeClicked" IsEnabled="False" />
-                                <TextBlock x:Name="TakeStatusText" Text="Play along with the click." VerticalAlignment="Center" />
+                                <TextBlock x:Name="TakeStatusText" VerticalAlignment="Center" />
+                            </StackPanel>
+                            <StackPanel x:Name="PlacementResultPanel" Spacing="4" Visibility="Collapsed">
+                                <TextBlock x:Name="PlacementLatencyText" Style="{StaticResource BodyStrongTextBlockStyle}"
+                                           TextWrapping="Wrap" />
+                                <TextBlock x:Name="PlacementLatencyDetailText" TextWrapping="Wrap" />
+                                <TextBlock x:Name="PlacementTimingText" TextWrapping="Wrap" />
+                                <TextBlock x:Name="PlacementOffsetText" TextWrapping="Wrap" />
+                                <Button x:Name="PlacementOffsetButton" Content="Apply suggested offset"
+                                        Click="ApplyPlacementOffsetClicked" HorizontalAlignment="Left" Visibility="Collapsed" />
+                                <HyperlinkButton x:Name="PlacementCalibrationLink" Content="Open guided tap test…"
+                                                 Click="ShowOffsetCalibrationClicked" Padding="0,2" />
                             </StackPanel>
                             <Grid ColumnSpacing="8">
                                 <Grid.ColumnDefinitions>
@@ -261,8 +351,10 @@
                                 </Grid.ColumnDefinitions>
                                 <TextBlock Text="Note" />
                                 <TextBlock Text="Beat" Grid.Column="1" />
-                                <TextBlock Text="Raw (ms)" Grid.Column="2" />
-                                <TextBlock Text="Adjusted (ms)" Grid.Column="3" />
+                                <TextBlock Text="On input (ms)" Grid.Column="2"
+                                           ToolTipService.ToolTip="Timing relative to the listed beat. Negative is early and positive is late." />
+                                <TextBlock Text="After offset (ms)" Grid.Column="3"
+                                           ToolTipService.ToolTip="Beat timing after recording compensation and before grid snapping." />
                                 <TextBlock Text="Start tick" Grid.Column="4" />
                                 <TextBlock Text="Length (ms)" Grid.Column="5" />
                             </Grid>

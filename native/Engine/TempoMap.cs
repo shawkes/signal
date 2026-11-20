@@ -83,6 +83,8 @@ public sealed class TempoMap
 
     private double SecondsPerTick(TempoChange change) => change.MicrosecondsPerQuarterNote / (1_000_000.0 * TicksPerQuarter);
 
+    internal double SecondsPerTickAt(long tick) => SecondsPerTick(_changes[SegmentAt(tick, byTime: false)]);
+
     private int SegmentAt(double position, bool byTime)
     {
         var low = 0;

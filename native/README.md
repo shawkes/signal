@@ -14,9 +14,9 @@ dotnet run --project native/Windows.App -c Release
 
 ### Open, edit, and play a MIDI file
 
-- Select **Open MIDI…** to open a `.mid` or `.midi` file. Select a track in the **Tracks** panel to edit it in the piano roll. **Save** updates the current file. Use **Save as…** to write a copy.
+- **File → New** (Ctrl+N) starts an untitled song with one piano track. **File → Open MIDI…** (Ctrl+O) opens a `.mid` or `.midi` file. Both commands offer to save a modified song first. Select a track in **Tracks** to edit it. **File → Save** (Ctrl+S) writes the song and **Save as…** (Ctrl+Shift+S) writes a copy.
 - Click an empty grid cell or select **Add note** to add a note. Drag from empty space to select a group, Ctrl-click to toggle individual notes, or press Ctrl+A to select the track's notes. Drag a selected note to move the group or drag its right edge to resize the group.
-- Set **Grid** to 1/4, 1/8, 1/16, or 1/32. Left and Right nudge the selection by one grid step and Up and Down move it by one semitone. Shift+Left and Shift+Right change selected lengths by one grid step. The ruler groups quarter-note beats in fours.
+- Set **Grid** to 1/4, 1/8, 1/16, 1/32, or 1/64. Left and Right nudge the selection by one grid step and Up and Down move it by one semitone. Shift+Left and Shift+Right change selected lengths by one grid step. The ruler groups beats by the song’s time signature.
 - Use Ctrl+C to copy, Ctrl+X to cut, Ctrl+V to paste, and Delete to remove the selected notes. Shift-click an empty cell to set the paste position. The piano-roll clipboard also works across tracks. **Undo** or Ctrl+Z reverses a group edit in one step.
 - Select **Play song** to hear all tracks from the beginning using the file's tempo map. Edits made during playback take effect on the next play. Press **Stop** to end playback early.
 - Finish a **Record test** take in **Recording settings** and select **Show in piano roll**. The test take appends as one undoable edit at the next available bar in the track selected when recording began.
@@ -37,30 +37,62 @@ The adapter supports MIDI formats 0 and 1 with PPQ timing. Convert SMPTE-timed f
 - Drag across the piano-roll ruler to mark a range. The endpoints snap to beats and can be dragged to adjust the selection.
 - Turn on **Loop**, then select **Play song**. All tracks repeat the highlighted range. With no selection, **Loop** repeats the whole song. **Clear range** returns to whole-song looping.
 - The loop can be changed during playback. Enabling a range while the playhead is outside it jumps to the range start. Turning **Loop** off lets playback continue from the current position to the end of the song. The range stays selected for the next play.
-- Turn on **Metronome** in the transport to hear the song's beat grid during playback. The click and notes follow the same tempo map at each loop boundary. Loop controls apply to the current session.
+- Turn on **Metronome** in the piano-roll transport to hear the song's beat grid during playback and recording. The transport click goes quiet when playback or recording stops. The click and notes follow the same tempo map at each loop boundary. Recording settings has a separate 120 BPM metronome for the recording and tap tests.
+
+### Tempo changes
+
+- The **Tempo** lane above the ruler shows the same BPM markers on every track. Click a marker to edit its BPM or remove it. Click empty space to add a point, or drag a later marker horizontally to move it. New and dragged positions snap to the piano-roll grid.
+- The opening marker stays at the song start. Click any marker to access tempo undo. During playback, the next play uses your edited tempo map.
+- Select **Tempo changes…** above the piano roll to see the opening BPM and every later tempo point. Opening the editor stops playback.
+- Select a point, enter its BPM and position, then use **Update selected**. Positions use quarter-note beats from 1 and a tick within the beat. The dialog shows the song's tick resolution.
+- Use **Add** at an unused position to create a tempo change. **Remove** deletes a selected later point. The opening point stays at beat 1, tick 0. To make the demo a constant tempo, remove its later point and set the opening BPM.
+- **Apply** commits the changes for the next playback, metronome, count-in, recording, and MIDI save. **Cancel** discards the dialog's changes. Reopen the dialog and select **Undo tempo edit** to undo the previous application.
+
+### Time signatures
+
+- Click the **Meter** button beside the BPM. Select **Bar 1**, set **Beats per bar** and **Beat unit**, then select **Apply**. For 3/4, use 3 and 1/4. Bar 2 begins after three quarter notes.
+- Choose **Add at a later bar…** for a meter change. An imported change partway through a bar starts a new bar at its original MIDI tick. The ruler, loop handles, and metronome follow these changes across all tracks. Note positions and lengths stay at their recorded ticks.
+- Select a later signature and click **Remove** to delete it. **Undo time signature edit** reverses the last meter edit. Use **Save** to write the signatures to the MIDI file.
 
 ### Record in the song
 
-With **Loop** off, select a track and press **Record** on the piano-roll transport. Recording runs from bar 1 and plays the backing tracks while you monitor the selected instrument or drum kit. Tick **Count-in** to hear one measure at the song's opening tempo and time signature before bar 1. The count-in works with the regular metronome off. Notes played before bar 1 are excluded from the take.
+With **Loop** off, select a track and press **Record** on the piano-roll transport. Recording runs from bar 1 and plays the backing tracks while you monitor the selected instrument or drum kit. Tick **Count-in** to hear one measure at the song's opening tempo and time signature before bar 1. The count-in works with the regular metronome off. A negative recording offset moves notes later. At −112 ms, an attack in the last 112 ms of the count-in is eligible for bar 1, even if you released the key during the count-in. Canceling during the count-in discards that take. With **Count-in** off, capture accepts input as soon as the engine arms the take.
 
-Press **Stop** to add the take as one undoable note edit. Recording uses the offset and optional quantization in **Recording settings**.
+Held notes appear and grow on the destination track as you play. The roll extends and follows the playhead through long takes. A held note crossing the loop boundary appears on both sides of the range. Press **Stop** to commit the take as one undoable edit and keep your place in the roll.
+
+Choose **Quantize** in **Recording settings** to snap new note starts after compensation. It supports 1/4 through 1/64 and preserves played lengths. **Off** captures freely timed notes. A MIDI file’s tick resolution sets the finest position it can store.
+
+### MIDI input routing
+
+- **Selected track** is the default in the Tracks panel. A controller on any MIDI channel plays the selected track's instrument or drum kit while idle, during playback, and during recording. Selecting another track releases held notes and sends new notes to the new track. During a take, held notes finish on the track where they started.
+- **Multi** routes each input channel to its matching track. This also records multiple channels into their own tracks in a single take. If several tracks use a channel, the first track with that primary channel takes precedence. Unassigned channels still appear in **View → MIDI monitor…**. Each destination track has its own undo for the take.
 
 ### Loop overdubbing
 
 - Select the destination track and drag on the piano-roll ruler to set the loop. Turn on **Loop** and press **Record**. With no range selected, **Record** loops the whole song. The range stays fixed for the take.
-- With **Count-in** on, one measure of clicks plays at the loop start's tempo in the song's opening meter. The transport then shows the pass number. The regular **Metronome** follows the song tempo map through each repeat.
-- Play over the backing tracks. Released notes join a later pass and repeat with the backing. If the placed note extends past the end of the range, it continues at the beginning. Live replay covers the first 2,048 captured note segments.
+- With **Count-in** on, one measure of clicks plays at the tempo and time signature in effect at the loop start. The transport then shows the pass number. The regular **Metronome** follows the song’s tempo and time signatures through each repeat.
+- Play over the backing tracks. Released notes join a later pass and repeat with the backing. If an offset moves a note across a loop boundary, its start keeps its distance from that boundary on the destination pass. If the placed note extends past the end of the range, it continues at the beginning. Live replay covers the first 2,048 captured note segments.
 - Press **Stop** to add all passes to the selected track. One **Undo** removes the whole overdub. Use regular MIDI save to keep the result.
 
 ### Test and calibrate recording
 
-1. In **Recording settings**, choose **Audio output** and **MIDI input**. **Play test note** exercises the monitor with synthetic MIDI if a keyboard is unavailable.
+1. In **Recording settings**, choose **Audio output** and **MIDI input**. The app remembers your selected MIDI input on the next launch. If the keyboard was disconnected, plug it in and choose **Refresh devices**. **Play test note** exercises the monitor with synthetic MIDI if a keyboard is unavailable.
 2. Use **Load SoundFont…** to select an SF2. The app starts with the same `A320U.sf2` General MIDI bank as packaged Electron Signal. [A320U license](../electron/assets/soundfonts/A320U-license.txt)
-3. In **Tap-to-beat latency test**, choose the MIDI controller you plan to record with or select **Space key** for a computer-keyboard trial. Start the test and tap once per click. The first two taps are practice. The test finishes after 12 measured taps, or you can stop it early after at least six. Select **Use estimate** to copy the median signed error to **Recording offset (ms)**. The result includes your timing as well as the input and audio paths.
-4. Select **Record test**, play several notes to the metronome, then select **Stop recording**. **Raw (ms)** and **Adjusted (ms)** show timing before and after compensation, measured against the beat listed in the row. Positive values indicate a late note. A positive recording offset shifts the saved note earlier. **Quantize** snaps **Start tick** after compensation and preserves **Length (ms)**. The take uses the selected track's MIDI channel.
+3. In **Recording offset calibration**, choose the MIDI controller you plan to record with or select **Space key** for a computer-keyboard trial. Start the tap test and tap once per click. The first two taps are practice. The test finishes after 12 measured taps, or you can stop it early after at least six. **Apply offset** sets **Recording offset (ms)** to the median signed tap error. Both **Apply offset** here and **Apply suggested offset** in the recording test save the value for future launches. Manual changes to the number box apply to the current session. The result includes your playing and device timing.
+4. Select **Record test**, play a few notes, then select **Stop recording**. **Estimated monitoring latency** gives the median delay from MIDI receipt to the first synth frame scheduled for output on the audio clock. With multiple notes, the result also gives the 95th percentile. You can play freely for this measurement. To get a **Suggested recording offset**, keep the metronome on and play one note per click for at least six clicks. **Apply suggested offset** sets the compensation for the next take. For example, consistently arriving 20 ms late suggests a +20 ms offset, which places future notes 20 ms earlier than their input timestamps. The take summary reports beat placement before and after compensation, before grid snapping. In the detail rows, negative values mean early and positive values mean late. Quantization snaps the start tick and preserves the played length.
 5. Note the actual sample rate, engine period, and buffer capacity reported for the output device. Start with **Minimum**. If the output exhibits gaps on this endpoint under the target workload, repeat with **Conservative** and then **Default** until the run is clean. Record the actual values for each comparison. Frames divided by sample rate give the corresponding duration in seconds. The period is the render cadence and the capacity is the endpoint's allocated buffer size. [Microsoft low-latency audio documentation](https://learn.microsoft.com/en-us/windows-hardware/drivers/audio/low-latency-audio)
 
+### Monitor MIDI input
+
+Open **View → MIDI monitor…** after selecting an input in **Recording settings**. The window shows the newest short MIDI messages first, with elapsed time, original MIDI channel, raw bytes, and a description. Select **Show Active Sensing** to include the controller's `FE` messages. Use **Pause** to inspect a burst and **Clear** to reset the list and elapsed time. Messages appear before track-channel routing and recording compensation.
+
 ### Workspace verification
+
+An eight-second WinUI run recorded all 16 synthetic notes while scrolling across three pages with a 1/64 edit grid. The p95 interval between playhead updates decreased from 47.3 ms to 16.7 ms. A second WinUI run blocked the dispatcher for 2.1 seconds while a background thread injected MIDI and rendered audio. All 2,250 notes played entirely during the freeze and the two notes outside it reached the document with their expected starts and durations. A ten-minute timing test at 120 BPM and −112 ms also checks 1,200 unquantized notes against a simulated endpoint running 100 parts per million slower than its nominal sample rate.
+
+Two 64-second runs on the default WASAPI endpoint used a separate thread to issue 128 synthetic quarter notes per run against a monotonic clock. The endpoint ran at 48 kHz with a 480-frame period and a 1,056-frame buffer. Both runs captured all 128 notes and reported zero estimated underruns and clock failures. The p95 absolute errors against the intended beat schedule were 12.50 ms and 1.04 ms. This includes variation in when the input thread woke. In the first run, recorded receipt timing agreed with the rendered click timing to within 0.71 ms throughout. The physical comparison procedure below uses a controller and an external audio capture.
+
+A separate warm WASAPI run rendered A320U, live notes, backing notes, and metronome clicks across tempo changes and loop boundaries. Over 450 callbacks (4.5 seconds), the render thread allocated zero managed bytes and the endpoint reported zero estimated underruns. A parallel test-suite run intermittently reported a small allocation in an overdub test. Its source remains unverified.
 
 All 57 Release tests passed. On the Remote Audio endpoint, a 3/4 MIDI at 120 BPM produced clicks at 0, 500, and 1,000 ms, then started backing playback and capture at bar 1 after 1.5 seconds. A MIDI note held across the boundary from the count-in was excluded. The tap estimator recovered a known +12 ms offset from synthetic MIDI against the audio clock.
 
@@ -92,7 +124,7 @@ Windows reported zero MIDI inputs. Physical key-to-sound median, p95, and compar
 | `Windows.Midi` | Windows MIDI inputs and receipt timestamps. |
 | `Windows.App` | WinUI piano roll, MIDI and SoundFont pickers, device setup, and recording readout. |
 
-The audio output supplies a frame-to-performance-counter anchor. The engine maps incoming MIDI timestamps to that presentation timeline for recording and plays monitoring events at the earliest writable frame. The metronome and synth share the render timeline. Offset and quantization change the saved placement. The stored note length comes from the uncompensated note-on and note-off interval.
+WinMM timestamps a controller message in its device callback. The WASAPI render thread maps that timestamp to a sample frame using the endpoint clock. Monitoring uses the earliest writable frame, and the metronome and synth share that timeline. Offset and quantization change the saved placement. The stored note length comes from the uncompensated note-on and note-off interval. A recording worker collects completed notes even while the window is frozen or minimized. WinUI samples the recording playhead at the current presentation time, so a delayed redraw catches up to the endpoint. The optional spacebar tap test receives computer-keyboard events through WinUI.
 
 The adapter uses DryWetMIDI to read and write the source event stream. It carries original track and event data across edits and replaces the destination only after writing the full file. The engine owns the portable song model, note editing, and scheduling. [DryWetMIDI source and documentation](https://github.com/melanchall/drywetmidi)
 

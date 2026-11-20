@@ -79,6 +79,13 @@ public sealed partial class MainWindow
     {
         _selectedTrack = track;
         RollView.Attach(track.Document, SongTempo.TicksPerQuarter, track.PrimaryChannel);
+        if (_engine is { } engine && !CalibrationInProgress)
+            ConfigureLiveMidi(engine);
+        if (SongCaptureInProgress)
+        {
+            ShowTrackRecordingPreview();
+            UpdatePlaybackControls();
+        }
         RefreshTrackSound();
     }
 
@@ -193,6 +200,7 @@ public sealed partial class MainWindow
     {
         bool canChange = CanChangeTracks;
         TrackList.IsEnabled = !_fileBusy;
+        MidiRoutingBox.IsEnabled = !CaptureInProgress && !_fileBusy;
         AddInstrumentButton.IsEnabled = canChange && _trackEditor.HasInstrumentChannel;
         AddDrumButton.IsEnabled = canChange;
         UndoTrackButton.IsEnabled = canChange && _trackEditor.CanUndoTrackEdit;

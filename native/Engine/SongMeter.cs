@@ -1,6 +1,6 @@
 namespace Signal.Native.Engine;
 
-/// <summary>The beats per bar and the note value of each beat at the beginning of a song.</summary>
+/// <summary>The beats per bar and note value of each beat in a time signature.</summary>
 public sealed record SongMeter
 {
     public static SongMeter CommonTime { get; } = new(4, 4);

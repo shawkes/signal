@@ -14,12 +14,14 @@ public sealed class MidiFileDocument
     private static readonly Lazy<EndOfTrackEvent> EndMarker = new(CreateEndMarker);
     private readonly MidiFile _source;
     private readonly TrackSource[] _tracks;
+    private readonly ILookup<long, TimeSignatureEvent> _signatures;
 
-    private MidiFileDocument(MidiFile source, Song song, TrackSource[] tracks)
+    private MidiFileDocument(MidiFile source, Song song, TrackSource[] tracks, ILookup<long, TimeSignatureEvent> signatures)
     {
         _source = source;
         Song = song;
         _tracks = tracks;
+        _signatures = signatures;
     }
 
     public Song Song { get; }
@@ -47,17 +49,24 @@ public sealed class MidiFileDocument
         if (file.TimeDivision is not TicksPerQuarterNoteTimeDivision { TicksPerQuarterNote: > 0 } division)
             throw new NotSupportedException("This editor requires PPQ timing. Convert SMPTE-timed MIDI to PPQ first.");
 
-        var tracks = file.GetTrackChunks().Select(ReadTrack).ToArray();
+        var tempoTicks = new HashSet<long>();
+        var rawSignatures = new List<(long Tick, TimeSignatureEvent Event)>();
+        var tracks = file.GetTrackChunks().Select(chunk => ReadTrack(chunk, tempoTicks, rawSignatures)).ToArray();
         if (tracks.Length == 0 || (file.OriginalFormat == MidiFileFormat.SingleTrack && tracks.Length != 1))
             throw new InvalidDataException("The MIDI file does not contain the expected number of tracks.");
 
         var midiTempoMap = file.GetTempoMap();
-        var tempo = new SongTempoMap(division.TicksPerQuarterNote,
-            midiTempoMap.GetTempoChanges().Select(change =>
-                new TempoChange(change.Time, (int)change.Value.MicrosecondsPerQuarterNote)));
-        var signature = midiTempoMap.GetTimeSignatureAtTime((MidiTimeSpan)0);
-        var openingMeter = new SongMeter(signature.Numerator, signature.Denominator);
-        return new MidiFileDocument(file, new Song(tempo, tracks.Select(track => track.Model), openingMeter), tracks);
+        // GetTempoChanges omits events that repeat the current BPM. Keep their positions
+        // editable and use the library's effective tempo when multiple events share a tick.
+        var tempo = new SongTempoMap(division.TicksPerQuarterNote, tempoTicks.Select(tick =>
+            new TempoChange(tick, (int)midiTempoMap.GetTempoAtTime((MidiTimeSpan)tick).MicrosecondsPerQuarterNote)));
+        var signatures = rawSignatures.ToLookup(item => item.Tick, item => item.Event);
+        var meters = new MeterMap(division.TicksPerQuarterNote, signatures.Select(group =>
+        {
+            var signature = midiTempoMap.GetTimeSignatureAtTime((MidiTimeSpan)group.Key);
+            return new MeterChange(group.Key, new SongMeter(signature.Numerator, signature.Denominator));
+        }));
+        return new MidiFileDocument(file, new Song(tempo, tracks.Select(track => track.Model), meterMap: meters), tracks, signatures);
     }
 
     /// <summary>Saves an edited song using the original file's track metadata.</summary>
@@ -98,7 +107,10 @@ public sealed class MidiFileDocument
         bool relocateGlobals = reordered || Enumerable.Range(0, _tracks.Length).Any(index =>
             !usedSources.Contains(index) && _tracks[index].Chunk.Events.Any(IsGlobalEvent));
         bool changeTempo = !song.TempoMap.Changes.SequenceEqual(Song.TempoMap.Changes);
-        var globalEvents = relocateGlobals ? CloneGlobalEvents(includeTempo: !changeTempo) : [];
+        var globalEvents = new List<FileEvent>();
+        var changedMeterTicks = AddMeterEdits(globalEvents, song.MeterMap);
+        if (relocateGlobals)
+            CopyGlobalEvents(globalEvents, changeTempo, changedMeterTicks);
         if (changeTempo)
             AddTempos(globalEvents, song.TempoMap.Changes);
 
@@ -108,7 +120,7 @@ public sealed class MidiFileDocument
             var edited = song.Tracks[index];
             List<FileEvent> events = index == 0 ? globalEvents : [];
             outputTracks[index] = sourceTrackIndices[index] is int sourceIndex
-                ? UpdateTrack(_tracks[sourceIndex], edited, events, relocateGlobals, changeTempo)
+                ? UpdateTrack(_tracks[sourceIndex], edited, events, relocateGlobals, changeTempo, changedMeterTicks)
                 : CreateTrack(edited, events);
         }
 
@@ -144,10 +156,10 @@ public sealed class MidiFileDocument
             if (index == 0)
             {
                 AddTempos(events, song.TempoMap.Changes);
-                if (song.OpeningMeter != SongMeter.CommonTime)
+                foreach (var change in song.MeterMap.Changes)
                 {
-                    events.Add(new FileEvent(0, new TimeSignatureEvent((byte)song.OpeningMeter.Numerator,
-                        checked((byte)song.OpeningMeter.Denominator))));
+                    if (change.Tick != 0 || change.Meter != SongMeter.CommonTime)
+                        events.Add(new FileEvent(change.Tick, CreateSignature(change.Meter)));
                 }
             }
             chunks.Add(CreateTrack(song.Tracks[index], events));
@@ -173,23 +185,55 @@ public sealed class MidiFileDocument
     private static bool IsGlobalEvent(MidiEvent midiEvent) =>
         midiEvent is SetTempoEvent or TimeSignatureEvent or KeySignatureEvent;
 
-    private List<FileEvent> CloneGlobalEvents(bool includeTempo)
+    private HashSet<long> AddMeterEdits(List<FileEvent> events, MeterMap edited)
     {
-        var result = new List<FileEvent>();
+        if (edited.Changes.SequenceEqual(Song.MeterMap.Changes))
+            return [];
+
+        var original = Song.MeterMap.Changes.ToDictionary(change => change.Tick, change => change.Meter);
+        var changes = edited.Changes.ToDictionary(change => change.Tick, change => change.Meter);
+        var changedTicks = original.Keys.Union(changes.Keys)
+            .Where(tick => original.GetValueOrDefault(tick) != changes.GetValueOrDefault(tick)).ToHashSet();
+        foreach (long tick in changedTicks)
+        {
+            if (!changes.TryGetValue(tick, out var meter))
+                continue;
+            var previousMeter = original.GetValueOrDefault(tick);
+            var source = _signatures[tick].LastOrDefault(item =>
+                item.Numerator == previousMeter?.Numerator && item.Denominator == previousMeter?.Denominator);
+            var signature = CreateSignature(meter);
+            if (source is not null)
+            {
+                signature.ClocksPerClick = source.ClocksPerClick;
+                signature.ThirtySecondNotesPerBeat = source.ThirtySecondNotesPerBeat;
+            }
+            events.Add(new FileEvent(tick, signature));
+        }
+        return changedTicks;
+    }
+
+    private static TimeSignatureEvent CreateSignature(SongMeter meter) =>
+        new(checked((byte)meter.Numerator), checked((byte)meter.Denominator));
+
+    private static bool IsEditedGlobal(MidiEvent midiEvent, long tick, bool replaceTempo, HashSet<long> changedMeterTicks) =>
+        (replaceTempo && midiEvent is SetTempoEvent) || (midiEvent is TimeSignatureEvent && changedMeterTicks.Contains(tick));
+
+    private void CopyGlobalEvents(List<FileEvent> result, bool replaceTempo, HashSet<long> changedMeterTicks)
+    {
         foreach (var track in _tracks)
         {
             long tick = 0;
             foreach (var midiEvent in track.Chunk.Events)
             {
                 tick = checked(tick + midiEvent.DeltaTime);
-                if (IsGlobalEvent(midiEvent) && (includeTempo || midiEvent is not SetTempoEvent))
+                if (IsGlobalEvent(midiEvent) && !IsEditedGlobal(midiEvent, tick, replaceTempo, changedMeterTicks))
                     result.Add(new FileEvent(tick, midiEvent.Clone()));
             }
         }
-        return result;
     }
 
-    private static TrackSource ReadTrack(TrackChunk chunk)
+    private static TrackSource ReadTrack(TrackChunk chunk, HashSet<long> tempoTicks,
+        List<(long Tick, TimeSignatureEvent Event)> signatures)
     {
         var trackName = chunk.Events.OfType<SequenceTrackNameEvent>().FirstOrDefault();
         string name = trackName is null ? "" : DecodeName(trackName.Text);
@@ -200,7 +244,11 @@ public sealed class MidiFileDocument
         foreach (var midiEvent in chunk.Events)
         {
             tick = checked(tick + midiEvent.DeltaTime);
-            if (midiEvent is NoteEvent noteEvent)
+            if (midiEvent is SetTempoEvent)
+                tempoTicks.Add(tick);
+            else if (midiEvent is TimeSignatureEvent signature)
+                signatures.Add((tick, signature));
+            else if (midiEvent is NoteEvent noteEvent)
             {
                 // Pair edits with the original event instances so all unmatched events can stay in the file.
                 var key = (Channel: (byte)noteEvent.Channel, Pitch: (byte)noteEvent.NoteNumber);
@@ -225,7 +273,7 @@ public sealed class MidiFileDocument
     }
 
     private static TrackChunk UpdateTrack(TrackSource source, SongTrack edited, List<FileEvent> events,
-        bool relocateGlobals, bool replaceTempo)
+        bool relocateGlobals, bool replaceTempo, HashSet<long> changedMeterTicks)
     {
         var remaining = edited.Notes.CountBy(note => note).ToDictionary();
         var removed = new HashSet<MidiEvent>(ReferenceEqualityComparer.Instance);
@@ -252,7 +300,7 @@ public sealed class MidiFileDocument
         {
             tick = checked(tick + midiEvent.DeltaTime);
             if (midiEvent is EndOfTrackEvent || removed.Contains(midiEvent) ||
-                (relocateGlobals && IsGlobalEvent(midiEvent)) || (replaceTempo && midiEvent is SetTempoEvent))
+                (relocateGlobals && IsGlobalEvent(midiEvent)) || IsEditedGlobal(midiEvent, tick, replaceTempo, changedMeterTicks))
                 continue;
             if (midiEvent is ChannelEvent channelEvent && channelEdits.TryGetValue(tick, out var edit))
             {
