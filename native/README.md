@@ -15,8 +15,9 @@ dotnet run --project native/Windows.App -c Release
 ### Open, edit, and play a MIDI file
 
 - Select **Open MIDI…** to open a `.mid` or `.midi` file. Select a track in the **Tracks** panel to edit it in the piano roll. **Save** updates the current file. Use **Save as…** to write a copy.
-- Click an empty grid cell or select **Add note** to add a note. Drag a note to move it, or drag its right edge to resize it. Horizontal edits use a sixteenth-note grid based on the file's tick resolution. The ruler groups beats in fours.
-- Select a note and press Delete to remove it. Use **Undo** or Ctrl+Z to step back one edit. The arrow keys move the selected note. Shift+Left and Shift+Right change its length.
+- Click an empty grid cell or select **Add note** to add a note. Drag from empty space to select a group, Ctrl-click to toggle individual notes, or press Ctrl+A to select the track's notes. Drag a selected note to move the group or drag its right edge to resize the group.
+- Set **Grid** to 1/4, 1/8, 1/16, or 1/32. Left and Right nudge the selection by one grid step and Up and Down move it by one semitone. Shift+Left and Shift+Right change selected lengths by one grid step. The ruler groups quarter-note beats in fours.
+- Use Ctrl+C to copy, Ctrl+X to cut, Ctrl+V to paste, and Delete to remove the selected notes. Shift-click an empty cell to set the paste position. The piano-roll clipboard also works across tracks. **Undo** or Ctrl+Z reverses a group edit in one step.
 - Select **Play song** to hear all tracks from the beginning using the file's tempo map. Edits made during playback take effect on the next play. Press **Stop** to end playback early.
 - Finish a **Record test** take in **Recording settings** and select **Show in piano roll**. The test take appends as one undoable edit at the next available bar in the track selected when recording began.
 

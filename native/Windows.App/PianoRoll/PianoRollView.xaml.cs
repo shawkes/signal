@@ -249,13 +249,13 @@ public sealed partial class PianoRollView : UserControl
         double left = EditorScroll.HorizontalOffset;
         double top = EditorScroll.VerticalOffset;
         int cellsPerBar = _cellsPerBeat * BeatsPerBar;
-        long firstCell = (long)Math.Floor(left / CellWidth);
-        long lastCell = (long)Math.Ceiling(Math.Min(Surface.Width, left + width) / CellWidth);
+        long firstCell = CellAtPosition(left);
+        long lastCell = CellAtPosition(Math.Min(Surface.Width, left + width));
         for (long cell = firstCell; cell <= lastCell; cell++)
         {
             bool bar = cell % cellsPerBar == 0;
             bool beat = cell % _cellsPerBeat == 0;
-            double x = cell * CellWidth;
+            double x = TickX(TickOfCell(cell));
             var line = bar ? _palette.MajorLine : beat ? _palette.BeatLine : _palette.MinorLine;
             AddRect(BeatLayer, x, 0, 1, Surface.Height, line);
             if (beat)
@@ -364,244 +364,6 @@ public sealed partial class PianoRollView : UserControl
         label.Visibility = width < 42 ? Visibility.Collapsed : Visibility.Visible;
     }
 
-    private void RefreshSelection()
-    {
-        var active = SelectedNote();
-        int count = _document?.Notes.Count ?? 0;
-        NoteCountText.Text = count == 1 ? "1 note" : $"{count} notes";
-        AddButton.IsEnabled = _editingEnabled && _document is not null;
-        DeleteButton.IsEnabled = _editingEnabled && active is not null;
-        UndoButton.IsEnabled = _editingEnabled && _document?.CanUndo is true;
-        if (active is not null)
-        {
-            var note = _preview ?? active.Value.Note;
-            string beat = $"{note.StartTick / TicksPerBar + 1}.{note.StartTick % TicksPerBar / _ticksPerBeat + 1}";
-            SelectionText.Text = $"{Caption(note.NoteNumber, note.Channel == SongTrackEditor.DrumChannel)} · {beat} · {note.LengthTicks} ticks";
-        }
-        else
-        {
-            SelectionText.Text = string.Empty;
-        }
-    }
-
-    private void Select(PianoRollNote item)
-    {
-        var previous = SelectedNote();
-        _selected = item.Id;
-        _entryPitch = item.Note.NoteNumber;
-        _entryTick = item.Note.StartTick;
-        if (previous is { } old && old.Id != item.Id)
-            UpdateNoteVisual(old.Id, old.Note);
-        UpdateNoteVisual(item.Id, item.Note);
-        RefreshSelection();
-    }
-
-    private PianoRollNote? SelectedNote()
-    {
-        if (_selected is not { } id || _document is null)
-            return null;
-        foreach (var item in _document.Notes)
-        {
-            if (item.Id == id)
-                return item;
-        }
-        return null;
-    }
-
-    private PianoRollNote? HitNote(Point point)
-    {
-        if (SelectedNote() is { } selected && NoteContains(selected.Note, point))
-            return selected;
-
-        var notes = _document!.Notes;
-        for (int i = notes.Count - 1; i >= 0; i--)
-        {
-            if (NoteContains(notes[i].Note, point))
-                return notes[i];
-        }
-        return null;
-    }
-
-    private void SurfacePointerPressed(object sender, PointerRoutedEventArgs args)
-    {
-        if (!_editingEnabled || _document is null || _pointerId is not null || _rulerPointerId is not null)
-            return;
-        var point = args.GetCurrentPoint(Surface);
-        if (!point.Properties.IsLeftButtonPressed || !IsWithinSurface(point.Position))
-            return;
-        Focus(FocusState.Pointer);
-        if (!Surface.CapturePointer(args.Pointer))
-            return;
-
-        _pointerId = args.Pointer.PointerId;
-        _press = point.Position;
-        _grabbed = HitNote(_press);
-        if (_grabbed is { } item)
-        {
-            double width = NoteWidth(item.Note);
-            _resizing = _press.X >= TickX(item.Note.StartTick) + width - Math.Min(7, width / 2);
-            Select(item);
-        }
-        args.Handled = true;
-    }
-
-    private void SurfacePointerMoved(object sender, PointerRoutedEventArgs args)
-    {
-        if (_pointerId != args.Pointer.PointerId)
-            return;
-        PreviewGesture(args.GetCurrentPoint(Surface).Position);
-        args.Handled = true;
-    }
-
-    private void PreviewGesture(Point point)
-    {
-        if (_grabbed is not { } item)
-            return;
-        var note = item.Note;
-        long deltaCells = (long)Math.Round((point.X - _press.X) / CellWidth, MidpointRounding.AwayFromZero);
-        var candidate = _resizing
-            ? note with { LengthTicks = ResizeLength(note, deltaCells) }
-            : note with
-            {
-                StartTick = MoveStart(note, deltaCells),
-                NoteNumber = (byte)Math.Clamp(note.NoteNumber - (int)Math.Round((point.Y - _press.Y) / RowHeight), 0, 127)
-            };
-        if (_preview == candidate)
-            return;
-        _preview = candidate;
-        UpdateNoteVisual(item.Id, candidate);
-        RefreshSelection();
-    }
-
-    private void SurfacePointerReleased(object sender, PointerRoutedEventArgs args)
-    {
-        if (_pointerId != args.Pointer.PointerId)
-            return;
-        var point = args.GetCurrentPoint(Surface).Position;
-        PreviewGesture(point);
-        var original = _grabbed;
-        var edited = _preview;
-        bool resize = _resizing;
-        CancelGesture();
-        Surface.ReleasePointerCapture(args.Pointer);
-        args.Handled = true;
-
-        if (original is { } item && edited is { } candidate && candidate != item.Note)
-        {
-            if (resize)
-                _document!.Resize(item.Id, candidate.StartTick, candidate.LengthTicks);
-            else
-                _document!.Move(item.Id, candidate.StartTick, candidate.NoteNumber);
-        }
-        else if (original is null && IsWithinSurface(point)
-                 && Math.Abs(point.X - _press.X) < 6 && Math.Abs(point.Y - _press.Y) < 6)
-        {
-            AddAt((long)Math.Floor(point.X / CellWidth),
-                  (byte)(PitchCount - 1 - (int)(point.Y / RowHeight)));
-        }
-    }
-
-    private void SurfacePointerCanceled(object sender, PointerRoutedEventArgs args)
-    {
-        if (_pointerId == args.Pointer.PointerId)
-            CancelGesture();
-    }
-
-    private void CancelGesture()
-    {
-        if (_grabbed is { } item)
-            UpdateNoteVisual(item.Id, item.Note);
-        _pointerId = null;
-        _grabbed = null;
-        _preview = null;
-        RefreshSelection();
-    }
-
-    private void EditorKeyDown(object sender, KeyRoutedEventArgs args)
-    {
-        if (!_editingEnabled || _document is null || _pointerId is not null || _rulerPointerId is not null)
-            return;
-
-        bool control = IsDown(VirtualKey.Control);
-        bool shift = IsDown(VirtualKey.Shift);
-        if (control && args.Key == VirtualKey.Z)
-            _document.Undo();
-        else if (args.Key == VirtualKey.Delete)
-            DeleteSelected();
-        else if (args.Key == VirtualKey.Insert)
-            AddNext();
-        else if (!control && args.Key is VirtualKey.Left or VirtualKey.Right or VirtualKey.Up or VirtualKey.Down)
-            Nudge(args.Key, shift);
-        else
-            return;
-        args.Handled = true;
-    }
-
-    private void Nudge(VirtualKey key, bool resize)
-    {
-        int cells = key switch { VirtualKey.Left => -1, VirtualKey.Right => 1, _ => 0 };
-        int semitones = key switch { VirtualKey.Up => 1, VirtualKey.Down => -1, _ => 0 };
-        if (SelectedNote() is { } item)
-        {
-            var note = item.Note;
-            if (resize)
-            {
-                long length = ResizeLength(note, cells);
-                if (length != note.LengthTicks)
-                    _document!.Resize(item.Id, note.StartTick, length);
-            }
-            else
-                _document!.Move(item.Id, MoveStart(note, cells), (byte)Math.Clamp(note.NoteNumber + semitones, 0, 127));
-
-            if (SelectedNote() is { } moved)
-            {
-                _entryTick = moved.Note.StartTick;
-                _entryPitch = moved.Note.NoteNumber;
-                RevealTick(_entryTick, _entryPitch);
-            }
-        }
-        else
-        {
-            _entryTick = MoveTick(_entryTick, cells, long.MaxValue);
-            _entryPitch = (byte)Math.Clamp(_entryPitch + semitones, 0, 127);
-            RevealTick(_entryTick, _entryPitch);
-        }
-    }
-
-    private void AddClicked(object sender, RoutedEventArgs args) => AddNext();
-    private void DeleteClicked(object sender, RoutedEventArgs args) => DeleteSelected();
-    private void UndoClicked(object sender, RoutedEventArgs args) => _document?.Undo();
-
-    private void AddNext()
-    {
-        long cell = CellNearestTick(_entryTick);
-        if (SelectedNote() is not null && TickOfCell(cell) <= _entryTick && cell < long.MaxValue)
-            cell++;
-
-        AddAt(cell, _entryPitch);
-        RevealTick(TickOfCell(cell), _entryPitch);
-    }
-
-    private void AddAt(long cell, byte pitch)
-    {
-        if (cell == long.MaxValue)
-            return;
-        long tick = TickOfCell(cell);
-        long duration = TickOfCell(cell + 1) - tick;
-        if (duration <= 0)
-            return;
-
-        var note = new SongNote(tick, duration, _defaultChannel, pitch, 96);
-        long id = _document!.Add(note);
-        Select(new PianoRollNote(id, note));
-    }
-
-    private void DeleteSelected()
-    {
-        if (_selected is { } id)
-            _document!.Delete(id);
-    }
-
     private void EditorViewChanged(object sender, ScrollViewerViewChangedEventArgs args)
     {
         RefreshViewport();
@@ -663,24 +425,24 @@ public sealed partial class PianoRollView : UserControl
         return point.X >= x && point.X < x + NoteWidth(note) && point.Y >= y && point.Y < y + RowHeight;
     }
 
-    private long MoveStart(SongNote note, long cells) => MoveTick(note.StartTick, cells, long.MaxValue - note.LengthTicks);
-
-    private long MoveTick(long tick, long cells, long maxTick)
+    private long MoveTick(long tick, long cells)
     {
         long cell = CellNearestTick(tick);
+        if (cells < -cell)
+            return 0;
         long target = cell + Math.Clamp(cells, -cell, long.MaxValue - cell);
         long delta = TickOfCell(target) - TickOfCell(cell);
-        return tick + Math.Clamp(delta, -tick, maxTick - tick);
+        return tick + Math.Clamp(delta, -tick, long.MaxValue - tick);
     }
 
-    private long ResizeLength(SongNote note, long cells)
+    private long CellAtPosition(double x)
     {
-        if (cells == 0 || note.StartTick == long.MaxValue)
-            return note.LengthTicks;
-
-        long end = MoveTick(note.StartTick + note.LengthTicks, cells, long.MaxValue);
-        long minimum = Math.Clamp(note.LengthTicks, 1, TickOfCell(1));
-        return Math.Max(minimum, end - note.StartTick);
+        long cell = (long)Math.Floor(x / CellWidth);
+        if (cell > 0 && x < TickX(TickOfCell(cell)))
+            return cell - 1;
+        if (cell < long.MaxValue && x >= TickX(TickOfCell(cell + 1)))
+            return cell + 1;
+        return cell;
     }
 
     // Convert absolute cell numbers so rounding never accumulates across beats.
