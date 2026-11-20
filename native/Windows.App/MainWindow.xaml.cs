@@ -42,6 +42,7 @@ public sealed partial class MainWindow : Window
     public MainWindow(string? startupMidiPath = null)
     {
         InitializeComponent();
+        OffsetBox.NumberFormatter = new global::Windows.Globalization.NumberFormatting.DecimalFormatter { FractionDigits = 1 };
         _startupMidiPath = startupMidiPath;
         AppWindow.Resize(new SizeInt32(1200, 780));
         TakeList.ItemsSource = _rows;
@@ -197,7 +198,10 @@ public sealed partial class MainWindow : Window
         Volatile.Read(ref _engine)?.RequestMidiReset();
         MidiErrorText.Visibility = Visibility.Collapsed;
         if ((MidiDeviceBox.SelectedItem as ComboBoxItem)?.Tag is not MidiInputDevice device)
+        {
+            UpdateCalibrationControls();
             return;
+        }
 
         try
         {
@@ -208,9 +212,14 @@ public sealed partial class MainWindow : Window
             MidiErrorText.Text = error.Message;
             MidiErrorText.Visibility = Visibility.Visible;
         }
+        UpdateCalibrationControls();
     }
 
-    private void ReceiveMidi(MidiMessage message) => Volatile.Read(ref _engine)?.TryEnqueue(message);
+    private void ReceiveMidi(MidiMessage message)
+    {
+        if (Volatile.Read(ref _activeTapInput) != SpaceTapInput && Volatile.Read(ref _engine) is { } engine)
+            EnqueueMonitoredMidi(engine, message);
+    }
 
     private async void LoadSoundFontClicked(object sender, RoutedEventArgs args)
     {
@@ -285,7 +294,7 @@ public sealed partial class MainWindow : Window
 
     private async void TestNoteClicked(object sender, RoutedEventArgs args)
     {
-        if (_engine is not { } engine)
+        if (_engine is not { } engine || CalibrationInProgress)
             return;
 
         _testNoteHeld = true;
@@ -293,9 +302,9 @@ public sealed partial class MainWindow : Window
         const byte note = 60;
         try
         {
-            engine.TryEnqueue(new MidiMessage(Stopwatch.GetTimestamp(), 0x9F, note, 100));
+            EnqueueMonitoredMidi(engine, new MidiMessage(Stopwatch.GetTimestamp(), 0x9F, note, 100));
             await Task.Delay(160);
-            engine.TryEnqueue(new MidiMessage(Stopwatch.GetTimestamp(), 0x8F, note, 0));
+            EnqueueMonitoredMidi(engine, new MidiMessage(Stopwatch.GetTimestamp(), 0x8F, note, 0));
         }
         finally
         {
@@ -303,35 +312,6 @@ public sealed partial class MainWindow : Window
             if (!_closed)
                 UpdateControls();
         }
-    }
-
-    private void RecordClicked(object sender, RoutedEventArgs args)
-    {
-        if (_engine is not { } engine || _finishingTake || _fileBusy)
-            return;
-
-        if (_recording)
-        {
-            engine.SetRecording(false, 0);
-            _recording = false;
-            _finishingTake = true;
-        }
-        else
-        {
-            engine.StopPlayback();
-            _rows.Clear();
-            _capturedNotes.Clear();
-            _firstImportedNote = null;
-            _captureTrack = _selectedTrack;
-            _noteCount = 0;
-            var offset = double.IsFinite(OffsetBox.Value) ? OffsetBox.Value : 10;
-            var division = QuantizeBox.SelectedIndex switch { 1 => 4, 2 => 8, 3 => 16, _ => 0 };
-            MetronomeSwitch.IsOn = true;
-            _takeId = engine.SetRecording(true, offset, division);
-            _recording = true;
-        }
-        UpdateReadout();
-        UpdateControls();
     }
 
     private void ShowTakeClicked(object sender, RoutedEventArgs args)
@@ -367,7 +347,13 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private void StopClicked(object sender, RoutedEventArgs args) => StopSongPlayback();
+    private void StopClicked(object sender, RoutedEventArgs args)
+    {
+        if (SongCaptureInProgress && _engine is { } engine)
+            StopTake(engine);
+        else
+            StopSongPlayback();
+    }
 
     private void StopSongPlayback()
     {
@@ -378,15 +364,18 @@ public sealed partial class MainWindow : Window
     private void UpdatePlayhead()
     {
         long? tick = _audioFailed ? null : _engine?.PlaybackTick;
+        int? countIn = _audioFailed || !_recording ? null : _engine?.CountInBeatsRemaining;
         RollView.SetPlayhead(tick);
-        if (tick is null)
+        if (tick is null && !SongCaptureInProgress)
             _playheadTimer.Stop();
 
-        if (_playing == tick.HasValue)
+        if (_playing == tick.HasValue && _countInRemaining == countIn)
             return;
 
         _playing = tick.HasValue;
+        _countInRemaining = countIn;
         UpdatePlaybackControls();
+        UpdateCalibrationControls();
         UpdateLoopDisplay();
     }
 
@@ -416,6 +405,12 @@ public sealed partial class MainWindow : Window
             if (note.TakeId != _takeId)
                 continue;
 
+            if (_capturePurpose == CapturePurpose.Calibration)
+            {
+                _tapTest?.AddTap(note.NearestBeat, note.RawMillisecondsFromBeat);
+                continue;
+            }
+
             _noteCount++;
             SongNote songNote = note.ToSongNote();
             _capturedNotes.Add(songNote with { LengthTicks = Math.Max(1, songNote.LengthTicks) });
@@ -424,16 +419,19 @@ public sealed partial class MainWindow : Window
             _rows.Insert(0, TakeRow.From(note, output.SampleRate));
         }
         if (takeFinished)
+            FinishTake(engine);
+        if (CalibrationInProgress)
         {
-            _finishingTake = false;
-            AddTakeToPianoRoll(engine.TempoMap.TicksPerQuarter);
-            UpdateControls();
+            if (_recording && _tapTest?.Complete == true)
+                StopTake(engine);
+            UpdateCalibrationControls();
         }
 
-        if (_takeId != 0)
+        if (_takeId != 0 && _capturePurpose != CapturePurpose.Calibration)
         {
             string noteLabel = _noteCount == 1 ? "note" : "notes";
-            string status = _audioFailed ? "Audio stopped" : _recording ? "Recording" :
+            string status = _audioFailed ? "Audio stopped" : _countInRemaining is { } beat ? $"Count-in {beat}" :
+                _recording ? "Recording" :
                 _finishingTake ? "Finishing take" : "Take complete";
             TakeStatusText.Text = $"{status} · {_noteCount} {noteLabel}";
         }
@@ -444,16 +442,23 @@ public sealed partial class MainWindow : Window
         if (_capturedNotes.Count == 0 || _captureTrack is not { } track)
             return;
 
-        long captureBar = 4L * ticksPerQuarter;
-        long songBar = 4L * SongTempo.TicksPerQuarter;
         var document = track.Document;
         var first = _capturedNotes.MinBy(note => note.StartTick);
-        long sourceBar = first.StartTick / captureBar * captureBar;
-        long rollEnd = document.Notes
-            .Select(note => note.Note.StartTick + note.Note.LengthTicks)
-            .DefaultIfEmpty()
-            .Max();
-        long targetBar = rollEnd == 0 ? 0 : ((rollEnd - 1) / songBar + 1) * songBar;
+        long sourceBar = 0;
+        long targetBar = 0;
+        double scale = 1;
+        if (_capturePurpose == CapturePurpose.PlacementTest)
+        {
+            long captureBar = 4L * ticksPerQuarter;
+            long songBar = 4L * SongTempo.TicksPerQuarter;
+            sourceBar = first.StartTick / captureBar * captureBar;
+            long rollEnd = document.Notes
+                .Select(note => note.Note.StartTick + note.Note.LengthTicks)
+                .DefaultIfEmpty()
+                .Max();
+            targetBar = rollEnd == 0 ? 0 : ((rollEnd - 1) / songBar + 1) * songBar;
+            scale = SongTempo.TicksPerQuarter / (double)ticksPerQuarter;
+        }
         document.Append(_capturedNotes.Select(ShiftNote));
         var imported = ShiftNote(first);
         _firstImportedNote = (track, imported);
@@ -463,7 +468,9 @@ public sealed partial class MainWindow : Window
 
         SongNote ShiftNote(SongNote note)
         {
-            double scale = SongTempo.TicksPerQuarter / (double)ticksPerQuarter;
+            if (_capturePurpose == CapturePurpose.Song)
+                return note with { Channel = track.PrimaryChannel };
+
             return note with
             {
                 StartTick = targetBar + (long)Math.Round((note.StartTick - sourceBar) * scale, MidpointRounding.AwayFromZero),
@@ -477,13 +484,14 @@ public sealed partial class MainWindow : Window
     {
         bool audioReady = _output is not null && !_audioFailed;
         bool pianoReady = audioReady && _bank is not null && _output!.SampleRate is >= 16000 and <= 192000;
-        bool takeInProgress = _recording || _finishingTake;
-        SoundFontButton.IsEnabled = !_loadingBank;
-        TestNoteButton.IsEnabled = pianoReady && !_testNoteHeld;
-        MetronomeSwitch.IsEnabled = audioReady;
-        SongMetronomeButton.IsEnabled = audioReady;
-        RecordButton.IsEnabled = audioReady && !_finishingTake && !_fileBusy;
-        RecordButton.Content = _recording ? "Stop recording" : "Record test";
+        bool takeInProgress = CaptureInProgress;
+        bool placementTest = _recording && _capturePurpose == CapturePurpose.PlacementTest;
+        SoundFontButton.IsEnabled = !_loadingBank && !takeInProgress;
+        TestNoteButton.IsEnabled = pianoReady && !_testNoteHeld && !CalibrationInProgress;
+        MetronomeSwitch.IsEnabled = audioReady && !CalibrationInProgress;
+        SongMetronomeButton.IsEnabled = audioReady && !CalibrationInProgress;
+        RecordButton.IsEnabled = audioReady && !_fileBusy && (!takeInProgress || placementTest);
+        RecordButton.Content = placementTest ? "Stop recording" : "Record test";
         ShowTakeButton.IsEnabled = _firstImportedNote is { } take && FindTrackIndex(take.Track) >= 0 &&
             !takeInProgress && !_fileBusy;
         AudioDeviceBox.IsEnabled = !takeInProgress;
@@ -495,22 +503,30 @@ public sealed partial class MainWindow : Window
         UpdateFileControls();
         UpdateTrackControls();
         UpdatePlaybackControls();
+        UpdateCalibrationControls();
     }
 
     private void UpdatePlaybackControls()
     {
         bool audioReady = _output is { SampleRate: >= 16000 and <= 192000 } && !_audioFailed;
-        bool takeInProgress = _recording || _finishingTake;
+        bool takeInProgress = CaptureInProgress;
         PlayButton.IsEnabled = audioReady && _bank is not null && !_playing && !takeInProgress && !_fileBusy
             && _trackEditor.Tracks.Any(track => track.Document.Notes.Count > 0);
-        StopButton.IsEnabled = audioReady && _playing;
+        SongRecordButton.IsEnabled = audioReady && _bank is not null && _selectedTrack is not null &&
+            !_loadingBank && !_playing && !takeInProgress && !_fileBusy;
+        CountInBox.IsEnabled = !takeInProgress && !_fileBusy;
+        StopButton.IsEnabled = audioReady && (_playing || (SongCaptureInProgress && _recording)) && !_finishingTake;
         LoopButton.IsEnabled = !_fileBusy && !takeInProgress;
-        ClearLoopRangeButton.IsEnabled = !_fileBusy;
-        string status = _playbackError ?? (_playing ? "Playing song" :
-            takeInProgress ? "Recording a take" :
-            !audioReady ? "Check the audio output in Recording test" :
+        ClearLoopRangeButton.IsEnabled = !_fileBusy && !takeInProgress;
+        string status = _playbackError ?? (_finishingTake ? "Finishing take…" :
+            _countInRemaining is { } beat ? $"Count-in {beat}" :
+            SongCaptureInProgress ? $"Recording · {_captureTrack?.Name}" :
+            _playing ? "Playing song" :
+            CalibrationInProgress ? "Tap test in progress" :
+            takeInProgress ? "Recording a test take" :
+            !audioReady ? "Check the audio output in Recording settings" :
                 _loadingBank ? "Loading SoundFont…" :
-                _bank is null ? "Load a SoundFont in Recording test" : "");
+                _bank is null ? "Load a SoundFont in Recording settings" : "");
         PlaybackStatusText.Text = status;
         PlaybackStatusText.Visibility = status.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
     }

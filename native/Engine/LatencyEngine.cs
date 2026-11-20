@@ -17,6 +17,8 @@ public sealed class LatencyEngine
     private readonly float[] _accent;
     private readonly float[] _beat;
     private IMonitorSynth _synth;
+    private SongTake? _songTake;
+    private SongTake? _activeSongTake;
     private int _queuedEvents;
     private long _sequence;
     private long _takeId;
@@ -62,27 +64,106 @@ public sealed class LatencyEngine
     /// <summary>The most recent stopped take, published after its held notes are closed.</summary>
     public long CompletedTakeId => Volatile.Read(ref _completedTakeId);
 
-    /// <summary>The rendered song position, the start tick while starting and null after stop.</summary>
-    public long? PlaybackTick => _playback.Tick;
+    /// <summary>The rendered song position. Null during count-in or when transport is stopped.</summary>
+    public long? PlaybackTick
+    {
+        get
+        {
+            var take = Volatile.Read(ref _songTake);
+            if (take is null)
+                return _playback.Tick;
+
+            return Volatile.Read(ref take.BeatsRemaining) == 0 ? Volatile.Read(ref take.PlaybackTick) : null;
+        }
+    }
+
+    /// <summary>The beats remaining in the count-in, or null outside count-in.</summary>
+    public int? CountInBeatsRemaining
+    {
+        get
+        {
+            var take = Volatile.Read(ref _songTake);
+            int remaining = take is null ? 0 : Volatile.Read(ref take.BeatsRemaining);
+            return remaining > 0 ? remaining : null;
+        }
+    }
 
     /// <summary>Starts an edited snapshot from tick zero using a separate synth owned by playback.</summary>
     public bool PlayNotes(IEnumerable<SongNote> notes, IMonitorSynth playbackSynth) =>
-        _playback.Start(notes, [], TempoMap, playbackSynth);
+        Volatile.Read(ref _songTake) is null &&
+        RequestPlayback(_playback.Prepare(notes, [], TempoMap, playbackSynth));
 
     /// <summary>Plays all tracks together on their own tempo map, without changing the recording clock.</summary>
     public bool PlaySong(Song song, IMonitorSynth playbackSynth, LoopRange? loop = null)
     {
         ArgumentNullException.ThrowIfNull(song);
-        return _playback.Start(
+        if (Volatile.Read(ref _songTake) is not null)
+            return false;
+
+        return RequestPlayback(_playback.Prepare(
             song.Tracks.SelectMany(track => track.Notes),
             song.Tracks.SelectMany(track => track.PlaybackMessages),
-            song.TempoMap, playbackSynth, song.Tracks.Select(track => track.EndTick).DefaultIfEmpty().Max(), loop);
+            song.TempoMap, playbackSynth, SongEndTick(song), loop, song.OpeningMeter));
+    }
+
+    /// <summary>Records from bar one, optionally playing one opening measure before tick zero.</summary>
+    public long RecordSong(Song song, IMonitorSynth playbackSynth, bool countIn,
+        double offsetMilliseconds, int quantizationDivision = 0, long? timestamp = null)
+    {
+        ArgumentNullException.ThrowIfNull(song);
+        long offsetFrames = RecordingOffsetFrames(offsetMilliseconds, quantizationDivision, song.TempoMap);
+        var backing = _playback.Prepare(
+            song.Tracks.SelectMany(track => track.Notes),
+            song.Tracks.SelectMany(track => track.PlaybackMessages),
+            song.TempoMap, playbackSynth, SongEndTick(song), meter: song.OpeningMeter);
+        var countInFrames = countIn ? CreateCountIn(song) : [];
+
+        lock (_producerLock)
+        {
+            if (Volatile.Read(ref _songTake) is not null)
+                throw new InvalidOperationException("A song take is already active.");
+
+            EnsureEventCapacity();
+            long startTimestamp = timestamp ?? Stopwatch.GetTimestamp();
+            var take = new SongTake(++_takeId, startTimestamp, offsetFrames, quantizationDivision,
+                song.TempoMap, song.OpeningMeter, backing, countInFrames);
+            Volatile.Write(ref _songTake, take);
+            Enqueue(new RenderEvent(startTimestamp, TakeId: take.Id, Kind: EventKind.StartSongTake));
+            return take.Id;
+        }
+    }
+
+    /// <summary>Finishes a song take, or cancels it if the countdown is still in progress.</summary>
+    public void StopSongRecording(long? timestamp = null)
+    {
+        lock (_producerLock)
+        {
+            var take = Volatile.Read(ref _songTake);
+            if (take is null || take.StopRequested)
+                return;
+
+            EnsureEventCapacity();
+            long stopTimestamp = Math.Max(take.StartTimestamp, timestamp ?? Stopwatch.GetTimestamp());
+            Enqueue(new RenderEvent(stopTimestamp, TakeId: take.Id, Kind: EventKind.StopSongTake));
+            take.StopRequested = true;
+        }
     }
 
     /// <summary>Updates the current pass's loop. Null lets playback continue to the song end.</summary>
-    public void SetPlaybackLoop(LoopRange? loop) => _playback.SetLoop(loop);
+    public void SetPlaybackLoop(LoopRange? loop)
+    {
+        if (Volatile.Read(ref _songTake) is null)
+            _playback.SetLoop(loop);
+    }
 
-    public void StopPlayback() => _playback.Stop();
+    public void StopPlayback()
+    {
+        lock (_producerLock)
+        {
+            if (Volatile.Read(ref _songTake) is null)
+                _playback.Stop();
+        }
+    }
 
     /// <summary>Publishes a prepared synth for the next render block.</summary>
     public void SetSynth(IMonitorSynth synth)
@@ -124,19 +205,14 @@ public sealed class LatencyEngine
     /// <summary>Starts or stops a take. A division of zero records without quantization.</summary>
     public long SetRecording(bool enabled, double offsetMilliseconds, int quantizationDivision = 0, long? timestamp = null)
     {
-        var offsetFrames = checked((long)Math.Round(offsetMilliseconds * SampleRate / 1000, MidpointRounding.AwayFromZero));
-        if (quantizationDivision < 0 || quantizationDivision > 4L * TempoMap.TicksPerQuarter)
-        {
-            throw new ArgumentOutOfRangeException(nameof(quantizationDivision));
-        }
+        long offsetFrames = RecordingOffsetFrames(offsetMilliseconds, quantizationDivision, TempoMap);
 
         lock (_producerLock)
         {
-            if (Volatile.Read(ref _queuedEvents) >= EventCapacity)
-            {
-                throw new InvalidOperationException("The audio event queue is full.");
-            }
+            if (Volatile.Read(ref _songTake) is not null)
+                throw new InvalidOperationException("Stop the song take before using the recording test.");
 
+            EnsureEventCapacity();
             if (enabled)
             {
                 _takeId++;
@@ -180,6 +256,7 @@ public sealed class LatencyEngine
 
         var endFrame = firstFrame + interleavedStereo.Length / 2;
         var currentFrame = firstFrame;
+        var mixedFrame = firstFrame;
         while (_pending.TryPeek(out var next, out _))
         {
             var stale = next.Kind == EventKind.Midi && next.MidiGeneration != _audioMidiGeneration;
@@ -203,7 +280,14 @@ public sealed class LatencyEngine
                 currentFrame = eventFrame;
             }
 
-            ProcessEvent(next, receivedFrame, synth);
+            if ((next.Kind is EventKind.StartSongTake or EventKind.StopSongTake) && mixedFrame < eventFrame)
+            {
+                MixTransport(interleavedStereo[(int)((mixedFrame - firstFrame) * 2)..(int)((eventFrame - firstFrame) * 2)],
+                    mixedFrame);
+                mixedFrame = eventFrame;
+            }
+
+            ProcessEvent(next, receivedFrame, eventFrame, synth);
         }
 
         if (currentFrame < endFrame)
@@ -211,7 +295,51 @@ public sealed class LatencyEngine
             synth.Render(interleavedStereo[(int)((currentFrame - firstFrame) * 2)..]);
         }
 
-        _playback.Render(interleavedStereo, firstFrame, TempoMap, MetronomeEnabled ? _mixMetronome : null);
+        if (mixedFrame < endFrame)
+            MixTransport(interleavedStereo[(int)((mixedFrame - firstFrame) * 2)..], mixedFrame);
+    }
+
+    private long RecordingOffsetFrames(double offsetMilliseconds, int quantizationDivision, TempoMap tempo)
+    {
+        if (quantizationDivision < 0 || quantizationDivision > 4L * tempo.TicksPerQuarter)
+            throw new ArgumentOutOfRangeException(nameof(quantizationDivision));
+
+        return checked((long)Math.Round(offsetMilliseconds * SampleRate / 1000, MidpointRounding.AwayFromZero));
+    }
+
+    private void EnsureEventCapacity()
+    {
+        if (Volatile.Read(ref _queuedEvents) >= EventCapacity)
+            throw new InvalidOperationException("The audio event queue is full.");
+    }
+
+    private static long SongEndTick(Song song) => song.Tracks.Select(track => track.EndTick).DefaultIfEmpty().Max();
+
+    private bool RequestPlayback(NotePlayback.PlaybackPlan? plan)
+    {
+        if (plan is null)
+            return false;
+
+        lock (_producerLock)
+        {
+            if (Volatile.Read(ref _songTake) is not null)
+                return false;
+
+            _playback.Request(plan);
+            return true;
+        }
+    }
+
+    private long[] CreateCountIn(Song song)
+    {
+        // The final entry is bar one. Round each onset from its unrounded absolute time.
+        int beats = song.OpeningMeter.Numerator;
+        double framesPerBeat = song.TempoMap.Changes[0].MicrosecondsPerQuarterNote * (double)SampleRate
+            * 4 / (song.OpeningMeter.Denominator * 1_000_000.0);
+        var onsets = new long[beats + 1];
+        for (int beat = 1; beat <= beats; beat++)
+            onsets[beat] = (long)Math.Round(beat * framesPerBeat, MidpointRounding.AwayFromZero);
+        return onsets;
     }
 
     private void Enqueue(RenderEvent input)
@@ -230,7 +358,7 @@ public sealed class LatencyEngine
         Volatile.Write(ref _midiGeneration, unchecked(_midiGeneration + 1));
     }
 
-    private void ProcessEvent(RenderEvent next, long receivedFrame, IMonitorSynth synth)
+    private void ProcessEvent(RenderEvent next, long receivedFrame, long eventFrame, IMonitorSynth synth)
     {
         switch (next.Kind)
         {
@@ -246,46 +374,122 @@ public sealed class LatencyEngine
                 _recording.Stop(receivedFrame);
                 Volatile.Write(ref _completedTakeId, next.TakeId);
                 break;
+            case EventKind.StartSongTake:
+                if (Volatile.Read(ref _songTake) is { } take && take.Id == next.TakeId)
+                {
+                    _recording.Stop(receivedFrame);
+                    _activeSongTake = take;
+                    take.CountInStartFrame = eventFrame;
+                    take.SongStartFrame = eventFrame + (take.CountInOnsets.Length == 0 ? 0 : take.CountInOnsets[^1]);
+                    _recording.Start(take.SongStartFrame, take.Id, take.OffsetFrames, take.QuantizationDivision, take.Tempo);
+                    _playback.Request(take.Backing, take.SongStartFrame);
+                }
+                break;
+            case EventKind.StopSongTake:
+                if (_activeSongTake is { } stopped && stopped.Id == next.TakeId)
+                {
+                    _recording.Stop(receivedFrame);
+                    _playback.Stop();
+                    _activeSongTake = null;
+                    Volatile.Write(ref _songTake, null);
+                    Volatile.Write(ref _completedTakeId, stopped.Id);
+                }
+                break;
         }
     }
 
-    private void MixClicks(Span<float> output, long firstFrame, TempoMap tempoMap, long firstAllowedOnset)
+    private void MixTransport(Span<float> output, long firstFrame)
+    {
+        if (_activeSongTake is not { } take)
+        {
+            _playback.Render(output, firstFrame, TempoMap, MetronomeEnabled ? _mixMetronome : null);
+            return;
+        }
+
+        if (firstFrame < take.SongStartFrame)
+        {
+            // A block may straddle the last count beat and bar one.
+            int countFrames = (int)Math.Min(output.Length / 2, take.SongStartFrame - firstFrame);
+            Span<float> countOutput = output[..(2 * countFrames)];
+            _playback.Render(countOutput, firstFrame, TempoMap, null);
+            MixCountIn(countOutput, firstFrame, take);
+            firstFrame += countFrames;
+            output = output[(2 * countFrames)..];
+            if (firstFrame < take.SongStartFrame)
+                return;
+        }
+
+        long songFrame = firstFrame - take.SongStartFrame;
+        if (!output.IsEmpty)
+        {
+            _playback.Render(output, firstFrame, TempoMap, null);
+            if (MetronomeEnabled)
+                MixClicks(output, songFrame, take.Tempo, take.Meter, 0);
+        }
+
+        long tick = (long)take.Tempo.SampleToTick(songFrame + output.Length / 2, SampleRate);
+        Volatile.Write(ref take.PlaybackTick, tick);
+        Volatile.Write(ref take.BeatsRemaining, 0);
+    }
+
+    private void MixCountIn(Span<float> output, long firstFrame, SongTake take)
+    {
+        long endFrame = firstFrame + output.Length / 2;
+        var offsets = take.CountInOnsets;
+        int beats = offsets.Length - 1;
+        int remaining = beats;
+        for (int index = 0; index < beats; index++)
+        {
+            long onset = take.CountInStartFrame + offsets[index];
+            if (onset >= endFrame)
+                break;
+
+            remaining = beats - index;
+            long nextPulse = take.CountInStartFrame + offsets[index + 1];
+            MixClick(output, firstFrame, onset, Math.Min(nextPulse, endFrame), index == 0 ? _accent : _beat);
+        }
+        Volatile.Write(ref take.BeatsRemaining, remaining);
+    }
+
+    private void MixClicks(Span<float> output, long firstFrame, TempoMap tempoMap, SongMeter meter, long firstAllowedOnset)
     {
         int clickLength = _beat.Length;
         long endFrame = firstFrame + output.Length / 2;
         long earliest = Math.Max(firstAllowedOnset, firstFrame - clickLength + 1);
         long bucket = earliest - earliest % clickLength;
+        double ticksPerBeat = 4.0 * tempoMap.TicksPerQuarter / meter.Denominator;
         while (bucket < endFrame)
         {
             // Keep one click per click-length interval even if the MIDI tempo packs many beats
             // into one sample. The half-frame offset matches TickToSample's nearest rounding.
             long firstOnset = Math.Max(bucket, firstAllowedOnset);
             double bucketTick = tempoMap.SecondsToTick((firstOnset - 0.5) / SampleRate);
-            long beat = Math.Max(0, (long)Math.Ceiling(bucketTick / tempoMap.TicksPerQuarter));
-            long clickFrame = BeatFrame(beat, tempoMap);
+            long beat = Math.Max(0, (long)Math.Ceiling(bucketTick / ticksPerBeat));
+            long clickFrame = tempoMap.TickToSample(beat * ticksPerBeat, SampleRate);
             if (clickFrame < firstOnset)
-                clickFrame = BeatFrame(++beat, tempoMap);
+                clickFrame = tempoMap.TickToSample(++beat * ticksPerBeat, SampleRate);
             if (clickFrame >= endFrame)
                 break;
 
-            var click = beat % 4 == 0 ? _accent : _beat;
-            long start = Math.Max(clickFrame, firstFrame);
-            long end = Math.Min(clickFrame + clickLength, endFrame);
-            for (var frame = start; frame < end; frame++)
-            {
-                var sample = (int)((frame - firstFrame) * 2);
-                var value = click[(int)(frame - clickFrame)];
-                output[sample] = Math.Clamp(output[sample] + value, -1, 1);
-                output[sample + 1] = Math.Clamp(output[sample + 1] + value, -1, 1);
-            }
+            MixClick(output, firstFrame, clickFrame, endFrame, beat % meter.Numerator == 0 ? _accent : _beat);
 
             long clickBucket = clickFrame - clickFrame % clickLength;
             bucket = Math.Max(bucket, clickBucket) + clickLength;
         }
     }
 
-    private long BeatFrame(long beat, TempoMap tempoMap) =>
-        tempoMap.TickToSample((double)beat * tempoMap.TicksPerQuarter, SampleRate);
+    private static void MixClick(Span<float> output, long firstFrame, long onset, long endFrame, float[] click)
+    {
+        long start = Math.Max(onset, firstFrame);
+        long end = Math.Min(onset + click.Length, endFrame);
+        for (long frame = start; frame < end; frame++)
+        {
+            int sample = (int)((frame - firstFrame) * 2);
+            float value = click[(int)(frame - onset)];
+            output[sample] = Math.Clamp(output[sample] + value, -1, 1);
+            output[sample + 1] = Math.Clamp(output[sample + 1] + value, -1, 1);
+        }
+    }
 
     private static float[] BuildClick(int sampleRate, double frequency, float gain)
     {
@@ -299,7 +503,25 @@ public sealed class LatencyEngine
         return click;
     }
 
-    private enum EventKind { Midi, StartRecording, StopRecording }
+    private enum EventKind { Midi, StartRecording, StopRecording, StartSongTake, StopSongTake }
+
+    private sealed class SongTake(long id, long startTimestamp, long offsetFrames, int quantizationDivision,
+        TempoMap tempo, SongMeter meter, NotePlayback.PlaybackPlan? backing, long[] countInOnsets)
+    {
+        public long Id { get; } = id;
+        public long StartTimestamp { get; } = startTimestamp;
+        public long OffsetFrames { get; } = offsetFrames;
+        public int QuantizationDivision { get; } = quantizationDivision;
+        public TempoMap Tempo { get; } = tempo;
+        public SongMeter Meter { get; } = meter;
+        public NotePlayback.PlaybackPlan? Backing { get; } = backing;
+        public long[] CountInOnsets { get; } = countInOnsets;
+        public bool StopRequested;
+        public long CountInStartFrame;
+        public long SongStartFrame;
+        public long PlaybackTick;
+        public int BeatsRemaining = countInOnsets.Length == 0 ? 0 : countInOnsets.Length - 1;
+    }
 
     private readonly record struct RenderEvent(
         long Timestamp,

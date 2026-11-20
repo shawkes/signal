@@ -15,8 +15,9 @@ public sealed class SongTrack(
     public long EndTick { get; } = endTick >= 0 ? endTick : throw new ArgumentOutOfRangeException(nameof(endTick));
 }
 
-public sealed class Song(TempoMap tempoMap, IEnumerable<SongTrack> tracks)
+public sealed class Song(TempoMap tempoMap, IEnumerable<SongTrack> tracks, SongMeter? openingMeter = null)
 {
     public TempoMap TempoMap { get; } = tempoMap;
     public IReadOnlyList<SongTrack> Tracks { get; } = Array.AsReadOnly(tracks.ToArray());
+    public SongMeter OpeningMeter { get; } = openingMeter ?? SongMeter.CommonTime;
 }

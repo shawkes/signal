@@ -18,7 +18,7 @@ dotnet run --project native/Windows.App -c Release
 - Click an empty grid cell or select **Add note** to add a note. Drag a note to move it, or drag its right edge to resize it. Horizontal edits use a sixteenth-note grid based on the file's tick resolution. The ruler groups beats in fours.
 - Select a note and press Delete to remove it. Use **Undo** or Ctrl+Z to step back one edit. The arrow keys move the selected note. Shift+Left and Shift+Right change its length.
 - Select **Play song** to hear all tracks from the beginning using the file's tempo map. Edits made during playback take effect on the next play. Press **Stop** to end playback early.
-- Finish a take on the **Recording test** tab and select **Show in piano roll**. The take appends as one undoable edit at the next available bar in the track selected when recording began.
+- Finish a **Record test** take in **Recording settings** and select **Show in piano roll**. The test take appends as one undoable edit at the next available bar in the track selected when recording began.
 
 To open a file at launch, run `dotnet run --project native/Windows.App -c Release -- "C:/Music/example.mid"`.
 
@@ -38,14 +38,23 @@ The adapter supports MIDI formats 0 and 1 with PPQ timing. Convert SMPTE-timed f
 - The loop can be changed during playback. Enabling a range while the playhead is outside it jumps to the range start. Turning **Loop** off lets playback continue from the current position to the end of the song. The range stays selected for the next play.
 - Turn on **Metronome** in the transport to hear the song's beat grid during playback. The click and notes follow the same tempo map at each loop boundary. Loop controls apply to the current session.
 
-### Record a take
+### Record in the song
 
-1. On the **Recording test** tab, choose **Audio output** and **MIDI input**. **Play test note** exercises the monitor with synthetic MIDI if a keyboard is unavailable.
+Select the track to record into and press **Record** on the piano-roll transport. Recording starts at bar 1 and plays the backing tracks while you monitor the selected instrument or drum kit. Tick **Count-in** to hear one measure at the song's opening tempo and time signature before bar 1. The count-in works with the regular metronome off. Notes played before bar 1 are excluded from the take.
+
+Press **Stop** to add the take as one undoable note edit. Song recording runs linearly. The loop range remains available for normal playback. Recording uses the offset and optional quantization in **Recording settings**.
+
+### Test and calibrate recording
+
+1. In **Recording settings**, choose **Audio output** and **MIDI input**. **Play test note** exercises the monitor with synthetic MIDI if a keyboard is unavailable.
 2. Use **Load SoundFont…** to select an SF2. The app starts with the same `A320U.sf2` General MIDI bank as packaged Electron Signal. [A320U license](../electron/assets/soundfonts/A320U-license.txt)
-3. Turn on **Metronome** to hear the click. Select **Record test**, play several notes, then select **Stop recording**. **Raw (ms)** and **Adjusted (ms)** show timing before and after compensation, measured against the beat listed in the row. Positive values indicate a late note. A positive **Recording offset (ms)** shifts the saved note earlier. **Quantize** snaps **Start tick** to the selected grid after compensation and preserves **Length (ms)**. The take uses the MIDI channel of the track selected when recording began.
-4. Note the actual sample rate, engine period, and buffer capacity reported for the output device. Start with **Minimum**. If the output exhibits gaps on this endpoint under the target workload, repeat with **Conservative** and then **Default** until the run is clean. Record the actual values for each comparison. Frames divided by sample rate give the corresponding duration in seconds. The period is the render cadence and the capacity is the endpoint's allocated buffer size. [Microsoft low-latency audio documentation](https://learn.microsoft.com/en-us/windows-hardware/drivers/audio/low-latency-audio)
+3. In **Tap-to-beat latency test**, choose the MIDI controller you plan to record with or select **Space key** for a computer-keyboard trial. Start the test and tap once per click. The first two taps are practice. The test finishes after 12 measured taps, or you can stop it early after at least six. Select **Use estimate** to copy the median signed error to **Recording offset (ms)**. The result includes your timing as well as the input and audio paths.
+4. Select **Record test**, play several notes to the metronome, then select **Stop recording**. **Raw (ms)** and **Adjusted (ms)** show timing before and after compensation, measured against the beat listed in the row. Positive values indicate a late note. A positive recording offset shifts the saved note earlier. **Quantize** snaps **Start tick** after compensation and preserves **Length (ms)**. The take uses the selected track's MIDI channel.
+5. Note the actual sample rate, engine period, and buffer capacity reported for the output device. Start with **Minimum**. If the output exhibits gaps on this endpoint under the target workload, repeat with **Conservative** and then **Default** until the run is clean. Record the actual values for each comparison. Frames divided by sample rate give the corresponding duration in seconds. The period is the render cadence and the capacity is the endpoint's allocated buffer size. [Microsoft low-latency audio documentation](https://learn.microsoft.com/en-us/windows-hardware/drivers/audio/low-latency-audio)
 
 ### Workspace verification
+
+All 57 Release tests passed. On the Remote Audio endpoint, a 3/4 MIDI at 120 BPM produced clicks at 0, 500, and 1,000 ms, then started backing playback and capture at bar 1 after 1.5 seconds. A MIDI note held across the boundary from the count-in was excluded. The tap estimator recovered a known +12 ms offset from synthetic MIDI against the audio clock.
 
 All 45 Release tests passed after adding track controls. In the WinUI demo, adding, changing the sound of, removing, and undoing a temporary track restored its preset and the clean document state. A separate MIDI round trip preserved the tempo changes and played piano, organ, and the Electronic kit through WASAPI with zero estimated underruns or clock failures.
 

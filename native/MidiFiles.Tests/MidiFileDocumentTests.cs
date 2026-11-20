@@ -94,6 +94,7 @@ public sealed class MidiFileDocumentTests : IDisposable
         var loaded = MidiFileDocument.Read(input);
         var track = Assert.Single(loaded.Song.Tracks);
         Assert.Equal(97, loaded.Song.TempoMap.TicksPerQuarter);
+        Assert.Equal(SongMeter.CommonTime, loaded.Song.OpeningMeter);
         Assert.Equal(new TempoChange(0, 500_000), Assert.Single(loaded.Song.TempoMap.Changes));
         Assert.Equal(new SongNote(12, 0, 3, 50, 95), track.Notes[0]);
         var edited = new SongTrack(track.Name, [track.Notes[0]], track.PlaybackMessages, track.EndTick);
@@ -207,9 +208,11 @@ public sealed class MidiFileDocumentTests : IDisposable
         var tempo = new Engine.TempoMap(384, [new TempoChange(0, 480_000), new TempoChange(384, 620_000)]);
         var melody = new SongTrack("Mélodie", [new SongNote(42, 130, 1, 62, 90)],
             [new SongChannelMessage(0, 0xC1, 9, 0)], endTick: 960);
-        MidiFileDocument.WriteNew(output, new Song(tempo, [melody, new SongTrack("Second track", [])]));
+        var meter = new SongMeter(3, 4);
+        MidiFileDocument.WriteNew(output, new Song(tempo, [melody, new SongTrack("Second track", [])], meter));
         var original = File.ReadAllBytes(output);
         var reopened = MidiFileDocument.Read(output);
+        Assert.Equal(meter, reopened.Song.OpeningMeter);
         Assert.Equal(tempo.Changes, reopened.Song.TempoMap.Changes);
         Assert.Equal(2, reopened.Song.Tracks.Count);
         Assert.Equal(melody.Name, reopened.Song.Tracks[0].Name);
@@ -221,6 +224,47 @@ public sealed class MidiFileDocumentTests : IDisposable
         Assert.Throws<ArgumentOutOfRangeException>(() => MidiFileDocument.WriteNew(output, invalid));
         Assert.Equal(original, File.ReadAllBytes(output));
         Assert.Single(Directory.EnumerateFiles(_directory));
+    }
+
+    [Fact]
+    public void OpeningMeterSurvivesEditorSnapshotsAndOriginalMidiMeterEventsRemainIntact()
+    {
+        string input = InDirectory("meter.mid");
+        string output = InDirectory("edited-meter.mid");
+        var conductor = new TrackChunk(
+            new TimeSignatureEvent(6, 8, 36, 8),
+            new TimeSignatureEvent(3, 4) { DeltaTime = 1440 });
+        var melody = new TrackChunk(NoteOn(62, 90, 0, 0), NoteOff(62, 0, 0, 480));
+        WriteFixture(input, MidiFileFormat.MultiTrack, new TicksPerQuarterNoteTimeDivision(480), conductor, melody);
+
+        var document = MidiFileDocument.Read(input);
+        var editor = new SongTrackEditor(document.Song, imported: true);
+        Assert.Equal(new SongMeter(6, 8), editor.OpeningMeter);
+        Assert.True(editor.RemoveTrack(editor.Tracks[0]));
+
+        var snapshot = editor.SnapshotSong();
+        Assert.Equal(editor.OpeningMeter, snapshot.OpeningMeter);
+        document.Write(output, snapshot, editor.CreateSourceIndices());
+        Assert.Equal(editor.OpeningMeter, MidiFileDocument.Read(output).Song.OpeningMeter);
+
+        var events = Assert.Single(ReadRaw(output).GetTrackChunks()).GetTimedEvents()
+            .Where(item => item.Event is TimeSignatureEvent);
+        Assert.Collection(events,
+            item =>
+            {
+                var signature = Assert.IsType<TimeSignatureEvent>(item.Event);
+                Assert.Equal(0, item.Time);
+                Assert.Equal(6, signature.Numerator);
+                Assert.Equal(8, signature.Denominator);
+                Assert.Equal(36, signature.ClocksPerClick);
+            },
+            item =>
+            {
+                var signature = Assert.IsType<TimeSignatureEvent>(item.Event);
+                Assert.Equal(1440, item.Time);
+                Assert.Equal(3, signature.Numerator);
+                Assert.Equal(4, signature.Denominator);
+            });
     }
 
     [Fact]

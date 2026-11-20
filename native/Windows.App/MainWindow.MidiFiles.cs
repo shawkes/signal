@@ -41,8 +41,9 @@ public sealed partial class MainWindow
         RefreshTrackPanel(editor.Tracks.FirstOrDefault(track => track.Document.Notes.Count > 0) ?? editor.Tracks[0]);
         double initialBpm = 60_000_000.0 / SongTempo.Changes[0].MicrosecondsPerQuarterNote;
         int changes = SongTempo.Changes.Count - 1;
-        SongTempoText.Text = changes == 0 ? $"{initialBpm:0.#} BPM" :
-            $"{initialBpm:0.#} BPM initially  ·  {changes} tempo {(changes == 1 ? "change" : "changes")}";
+        var meter = song.OpeningMeter;
+        SongTempoText.Text = $"{initialBpm:0.#} BPM  ·  {meter.Numerator}/{meter.Denominator}" +
+            (changes == 0 ? "" : $"  ·  {changes} tempo {(changes == 1 ? "change" : "changes")}");
         SongEdited();
     }
 
@@ -192,7 +193,7 @@ public sealed partial class MainWindow
         {
             args.Cancel = true;
             if (_recording || _finishingTake)
-                WorkspaceTabs.SelectedIndex = 1;
+                WorkspaceTabs.SelectedIndex = SongCaptureInProgress ? 0 : 1;
             return;
         }
         if (!SongIsDirty)

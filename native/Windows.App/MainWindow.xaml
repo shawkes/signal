@@ -51,6 +51,10 @@
                                 <TextBlock Text="Stop" />
                             </StackPanel>
                         </Button>
+                        <Button x:Name="SongRecordButton" Content="Record" Click="SongRecordClicked"
+                                IsEnabled="False" ToolTipService.ToolTip="Record into the selected track from bar 1" />
+                        <CheckBox x:Name="CountInBox" Content="Count-in" MinWidth="0"
+                                  ToolTipService.ToolTip="Play one measure of clicks before recording" />
                         <ToggleButton x:Name="LoopButton" Content="Loop" Click="LoopClicked"
                                       AutomationProperties.Name="Loop playback"
                                       ToolTipService.ToolTip="Repeat the highlighted range or the whole song" />
@@ -139,10 +143,11 @@
                 </Grid>
             </Grid>
         </TabViewItem>
-        <TabViewItem Header="Recording test" IsClosable="False">
+        <TabViewItem Header="Recording settings" IsClosable="False">
             <ScrollViewer>
-                <StackPanel Padding="24" Spacing="18" MaxWidth="920">
-                    <TextBlock Text="MIDI latency test" Style="{StaticResource TitleTextBlockStyle}" />
+                <StackPanel Padding="24" Spacing="18" MaxWidth="920"
+                            PreviewKeyDown="CalibrationKeyDown" PreviewKeyUp="CalibrationKeyUp">
+                    <TextBlock Text="Recording settings" Style="{StaticResource TitleTextBlockStyle}" />
 
                     <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                             BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1"
@@ -191,6 +196,29 @@
                         <Button x:Name="TestNoteButton" Grid.Column="2" Content="Play test note"
                                 IsEnabled="False" Click="TestNoteClicked" />
                     </Grid>
+
+                    <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1"
+                            CornerRadius="8" Padding="16">
+                        <StackPanel Spacing="10">
+                            <TextBlock Text="Tap-to-beat latency test" Style="{StaticResource SubtitleTextBlockStyle}" />
+                            <TextBlock Text="Tap once per metronome click. The first two taps are practice."
+                                       TextWrapping="Wrap" />
+                            <StackPanel Orientation="Horizontal" Spacing="10">
+                                <ComboBox x:Name="CalibrationInputBox" SelectedIndex="1" MinWidth="145"
+                                          AutomationProperties.Name="Tap input" SelectionChanged="CalibrationInputChanged">
+                                    <ComboBoxItem Content="MIDI keyboard" />
+                                    <ComboBoxItem Content="Space key" />
+                                </ComboBox>
+                                <Button x:Name="CalibrationButton" Content="Start tap test" IsEnabled="False"
+                                        Click="CalibrationClicked" />
+                                <Button x:Name="ApplyCalibrationButton" Content="Use estimate" IsEnabled="False"
+                                        Click="ApplyCalibrationClicked" />
+                            </StackPanel>
+                            <TextBlock x:Name="CalibrationStatusText" TextWrapping="Wrap"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        </StackPanel>
+                    </Border>
 
                     <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                             BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1"

@@ -1,6 +1,7 @@
 namespace Signal.Native.Engine;
 
-internal delegate void MetronomeMixer(Span<float> output, long firstFrame, TempoMap tempo, long firstAllowedOnset);
+internal delegate void MetronomeMixer(
+    Span<float> output, long firstFrame, TempoMap tempo, SongMeter meter, long firstAllowedOnset);
 
 /// <summary>Plays a prepared snapshot on the audio thread without changing live MIDI state.</summary>
 internal sealed class NotePlayback(int sampleRate)
@@ -32,8 +33,8 @@ internal sealed class NotePlayback(int sampleRate)
         }
     }
 
-    public bool Start(IEnumerable<SongNote> notes, IEnumerable<SongChannelMessage> messages,
-        TempoMap tempo, IMonitorSynth synth, long endTick = 0, LoopRange? loop = null)
+    public PlaybackPlan? Prepare(IEnumerable<SongNote> notes, IEnumerable<SongChannelMessage> messages,
+        TempoMap tempo, IMonitorSynth synth, long endTick = 0, LoopRange? loop = null, SongMeter? meter = null)
     {
         ArgumentNullException.ThrowIfNull(notes);
         ArgumentNullException.ThrowIfNull(synth);
@@ -64,7 +65,7 @@ internal sealed class NotePlayback(int sampleRate)
             events.Add(new PlaybackEvent(frame, message.Tick, message.Status, message.Data1, message.Data2, events.Count));
         }
         if (events.Count == 0)
-            return false;
+            return null;
 
         events.Sort(static (left, right) =>
         {
@@ -79,21 +80,27 @@ internal sealed class NotePlayback(int sampleRate)
         MergeOverlappingReleases(events);
         long endFrame = Math.Max(events[^1].Frame, tempo.TickToSample(endTick, sampleRate));
         long endWithRelease = checked(endFrame + sampleRate);
-        var plan = new PlaybackPlan(synth, tempo, events.ToArray(), endFrame, endWithRelease);
+        var plan = new PlaybackPlan(synth, tempo, meter ?? SongMeter.CommonTime, events.ToArray(), endFrame, endWithRelease);
         if (loop is { } range)
         {
             plan.RequestedLoop = PrepareLoop(plan, range);
             plan.Tick = range.StartTick;
         }
+        return plan;
+    }
+
+    public void Request(PlaybackPlan? plan, long? originFrame = null)
+    {
+        if (plan is not null)
+            plan.OriginFrame = originFrame;
         Volatile.Write(ref _requested, plan);
-        return true;
     }
 
     public void SetLoop(LoopRange? loop)
     {
         ValidateRange(loop);
         var plan = Volatile.Read(ref _requested);
-        if (plan is null || Volatile.Read(ref plan.Tick) == Finished ||
+        if (plan is null || plan.OriginFrame is not null || Volatile.Read(ref plan.Tick) == Finished ||
             Volatile.Read(ref plan.RequestedLoop)?.Range == loop)
         {
             return;
@@ -118,7 +125,7 @@ internal sealed class NotePlayback(int sampleRate)
             }
             _active = requested;
             _loop = null;
-            _startFrame = firstFrame;
+            _startFrame = requested?.OriginFrame ?? firstFrame;
             _firstAllowedOnset = 0;
             _nextEvent = 0;
         }
@@ -134,9 +141,12 @@ internal sealed class NotePlayback(int sampleRate)
 
         if (_active is not { } active)
         {
-            mixMetronome?.Invoke(output, firstFrame, liveTempo, 0);
+            mixMetronome?.Invoke(output, firstFrame, liveTempo, SongMeter.CommonTime, 0);
             return;
         }
+
+        if (firstFrame < _startFrame)
+            return;
 
         ApplyLoopChange(active, firstFrame, restarting);
         if (_loop is { } loop)
@@ -180,7 +190,8 @@ internal sealed class NotePlayback(int sampleRate)
             int frames = (int)Math.Min(output.Length / 2, loop.EndFrame - position);
             var segment = output[..(2 * frames)];
             RenderEvents(active.Synth, loop.Events, segment, position, loop.EndFrame, fade);
-            mixMetronome?.Invoke(segment, position, active.TempoMap, Math.Max(loop.StartFrame, _firstAllowedOnset));
+            mixMetronome?.Invoke(segment, position, active.TempoMap, active.Meter,
+                Math.Max(loop.StartFrame, _firstAllowedOnset));
 
             firstFrame += frames;
             position += frames;
@@ -215,9 +226,9 @@ internal sealed class NotePlayback(int sampleRate)
         if (mixMetronome is not null)
         {
             if (onSongGrid)
-                mixMetronome(output, relativeFirst, active.TempoMap, _firstAllowedOnset);
+                mixMetronome(output, relativeFirst, active.TempoMap, active.Meter, _firstAllowedOnset);
             else
-                mixMetronome(output, firstFrame, liveTempo, 0);
+                mixMetronome(output, firstFrame, liveTempo, SongMeter.CommonTime, 0);
         }
 
         long tick = _nextEvent == active.Events.Length && relativeEnd >= active.EndFrame
@@ -377,25 +388,27 @@ internal sealed class NotePlayback(int sampleRate)
         events.RemoveRange(written, events.Count - written);
     }
 
-    private sealed class PlaybackPlan(
-        IMonitorSynth synth, TempoMap tempoMap, PlaybackEvent[] events, long endFrame, long endWithRelease)
+    internal sealed class PlaybackPlan(
+        IMonitorSynth synth, TempoMap tempoMap, SongMeter meter, PlaybackEvent[] events, long endFrame, long endWithRelease)
     {
         public IMonitorSynth Synth { get; } = synth;
         public TempoMap TempoMap { get; } = tempoMap;
+        public SongMeter Meter { get; } = meter;
         public PlaybackEvent[] Events { get; } = events;
         public long EndFrame { get; } = endFrame;
         public long EndWithRelease { get; } = endWithRelease;
         public PlaybackLoop? RequestedLoop;
+        public long? OriginFrame;
         public long Tick;
     }
 
-    private sealed record PlaybackLoop(LoopRange Range, long StartFrame, long EndFrame,
+    internal sealed record PlaybackLoop(LoopRange Range, long StartFrame, long EndFrame,
         PlaybackEvent[] Events, PlaybackEvent[] Chase)
     {
         public long Length => EndFrame - StartFrame;
     }
 
-    private readonly record struct PlaybackEvent(long Frame, long Tick, byte Status, byte Data1, byte Data2, int Order)
+    internal readonly record struct PlaybackEvent(long Frame, long Tick, byte Status, byte Data1, byte Data2, int Order)
     {
         public int Command => Status & 0xf0;
         public int Priority => Command switch { 0x80 => 0, 0x90 => 2, _ => 1 };

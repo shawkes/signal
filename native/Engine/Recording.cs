@@ -23,6 +23,9 @@ internal sealed class Recording(TempoMap tempoMap, int sampleRate)
     private const int NotesPerChannel = 128;
     private readonly HeldNote[] _held = new HeldNote[16 * NotesPerChannel];
     private readonly SingleConsumerRing<RecordedNote> _notes = new(2048);
+    private readonly TempoMap _defaultTempoMap = tempoMap;
+    private TempoMap _takeTempoMap = tempoMap;
+    private long? _songOriginFrame;
     private long _takeId;
     private long _offsetFrames;
     private int _quantizationDivision;
@@ -30,9 +33,18 @@ internal sealed class Recording(TempoMap tempoMap, int sampleRate)
 
     public long DroppedNotes => Volatile.Read(ref _droppedNotes);
 
-    public void Start(long atFrame, long takeId, long offsetFrames, int quantizationDivision)
+    public void Start(long atFrame, long takeId, long offsetFrames, int quantizationDivision) =>
+        StartTake(atFrame, takeId, offsetFrames, quantizationDivision, _defaultTempoMap, null);
+
+    public void Start(long firstSongFrame, long takeId, long offsetFrames, int quantizationDivision, TempoMap songTempoMap) =>
+        StartTake(firstSongFrame, takeId, offsetFrames, quantizationDivision, songTempoMap, firstSongFrame);
+
+    private void StartTake(long atFrame, long takeId, long offsetFrames, int quantizationDivision,
+        TempoMap takeTempoMap, long? songOriginFrame)
     {
         Stop(atFrame);
+        _takeTempoMap = takeTempoMap;
+        _songOriginFrame = songOriginFrame;
         _takeId = takeId;
         _offsetFrames = offsetFrames;
         _quantizationDivision = quantizationDivision;
@@ -59,7 +71,7 @@ internal sealed class Recording(TempoMap tempoMap, int sampleRate)
 
     public void ProcessMidi(MidiMessage message, long frame)
     {
-        if (_takeId == 0)
+        if (_takeId == 0 || (_songOriginFrame is { } firstSongFrame && frame < firstSongFrame))
         {
             return;
         }
@@ -97,15 +109,24 @@ internal sealed class Recording(TempoMap tempoMap, int sampleRate)
 
         _held[key] = default;
         var playedLengthFrames = Math.Max(0, releaseFrame - held.ReceivedFrame);
-        var compensatedStart = held.ReceivedFrame - _offsetFrames;
-        var startTick = tempoMap.SampleToTick(compensatedStart, sampleRate);
-        var endTick = tempoMap.SampleToTick(compensatedStart + playedLengthFrames, sampleRate);
-        var lengthTicks = RoundTick(endTick) - RoundTick(startTick);
-        var beat = (long)Math.Floor(startTick / tempoMap.TicksPerQuarter);
+        bool onSongTimeline = _songOriginFrame.HasValue;
+        var relativeReceipt = held.ReceivedFrame - _songOriginFrame.GetValueOrDefault();
+        var compensatedStart = relativeReceipt - _offsetFrames;
+        var startTick = _takeTempoMap.SampleToTick(compensatedStart, sampleRate);
+        // A tempo change can fall inside the played interval. Measure its duration before moving the note.
+        var durationStart = onSongTimeline ? relativeReceipt : compensatedStart;
+        var durationStartTick = onSongTimeline
+            ? _takeTempoMap.SampleToTick(durationStart, sampleRate)
+            : startTick;
+        var durationEndTick = _takeTempoMap.SampleToTick(durationStart + playedLengthFrames, sampleRate);
+        var lengthTicks = RoundTick(durationEndTick) - RoundTick(durationStartTick);
+        var beat = (long)Math.Floor(startTick / _takeTempoMap.TicksPerQuarter);
+        if (onSongTimeline)
+            beat = Math.Max(0, beat);
 
         if (_quantizationDivision != 0)
         {
-            var grid = 4.0 * tempoMap.TicksPerQuarter / _quantizationDivision;
+            var grid = 4.0 * _takeTempoMap.TicksPerQuarter / _quantizationDivision;
             startTick = Math.Round(startTick / grid, MidpointRounding.AwayFromZero) * grid;
         }
 
@@ -120,9 +141,9 @@ internal sealed class Recording(TempoMap tempoMap, int sampleRate)
         var note = new RecordedNote(
             _takeId, Math.Max(0, RoundTick(startTick)), lengthTicks,
             (byte)(key / NotesPerChannel), (byte)(key % NotesPerChannel), held.Velocity,
-            held.ReceivedFrame, compensatedStart, playedLengthFrames, beat,
+            held.ReceivedFrame, held.ReceivedFrame - _offsetFrames, playedLengthFrames, beat,
             (compensatedStart - beatFrame) * 1000.0 / sampleRate,
-            (held.ReceivedFrame - beatFrame) * 1000.0 / sampleRate);
+            (relativeReceipt - beatFrame) * 1000.0 / sampleRate);
 
         if (!_notes.TryWrite(note))
         {
@@ -130,7 +151,7 @@ internal sealed class Recording(TempoMap tempoMap, int sampleRate)
         }
     }
 
-    private long BeatFrame(long beat) => tempoMap.TickToSample((double)beat * tempoMap.TicksPerQuarter, sampleRate);
+    private long BeatFrame(long beat) => _takeTempoMap.TickToSample((double)beat * _takeTempoMap.TicksPerQuarter, sampleRate);
     private static long RoundTick(double tick) => (long)Math.Round(tick, MidpointRounding.AwayFromZero);
 
     private readonly record struct HeldNote(long ReceivedFrame, byte Velocity);

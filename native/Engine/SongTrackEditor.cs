@@ -48,12 +48,14 @@ public sealed class SongTrackEditor
             throw new ArgumentException("A song needs at least one track.", nameof(song));
 
         TempoMap = song.TempoMap;
+        OpeningMeter = song.OpeningMeter;
         Tracks = _tracks.AsReadOnly();
         for (int index = 0; index < song.Tracks.Count; index++)
             Insert(index, new EditableSongTrack(song.Tracks[index], imported ? index : null));
     }
 
     public TempoMap TempoMap { get; }
+    public SongMeter OpeningMeter { get; }
     public IReadOnlyList<EditableSongTrack> Tracks { get; }
     public bool CanUndoTrackEdit => _undo.Count != 0;
     public bool HasInstrumentChannel => FindInstrumentChannel() is not null;
@@ -64,7 +66,7 @@ public sealed class SongTrackEditor
     public event Action? TracksChanged;
 
     public Song SnapshotSong() => new(TempoMap, _tracks.Select(track =>
-        new SongTrack(track.Name, track.Document.CreatePlaybackSnapshot(), track.PlaybackMessages, track.EndTick)));
+        new SongTrack(track.Name, track.Document.CreatePlaybackSnapshot(), track.PlaybackMessages, track.EndTick)), OpeningMeter);
 
     public int?[] CreateSourceIndices() => _tracks.Select(track => track.SourceIndex).ToArray();
 

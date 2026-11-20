@@ -51,10 +51,13 @@ public sealed class MidiFileDocument
         if (tracks.Length == 0 || (file.OriginalFormat == MidiFileFormat.SingleTrack && tracks.Length != 1))
             throw new InvalidDataException("The MIDI file does not contain the expected number of tracks.");
 
+        var midiTempoMap = file.GetTempoMap();
         var tempo = new SongTempoMap(division.TicksPerQuarterNote,
-            file.GetTempoMap().GetTempoChanges().Select(change =>
+            midiTempoMap.GetTempoChanges().Select(change =>
                 new TempoChange(change.Time, (int)change.Value.MicrosecondsPerQuarterNote)));
-        return new MidiFileDocument(file, new Song(tempo, tracks.Select(track => track.Model)), tracks);
+        var signature = midiTempoMap.GetTimeSignatureAtTime((MidiTimeSpan)0);
+        var openingMeter = new SongMeter(signature.Numerator, signature.Denominator);
+        return new MidiFileDocument(file, new Song(tempo, tracks.Select(track => track.Model), openingMeter), tracks);
     }
 
     /// <summary>Saves an edited song using the original file's track metadata.</summary>
@@ -139,7 +142,14 @@ public sealed class MidiFileDocument
         {
             var events = new List<FileEvent>();
             if (index == 0)
+            {
                 AddTempos(events, song.TempoMap.Changes);
+                if (song.OpeningMeter != SongMeter.CommonTime)
+                {
+                    events.Add(new FileEvent(0, new TimeSignatureEvent((byte)song.OpeningMeter.Numerator,
+                        checked((byte)song.OpeningMeter.Denominator))));
+                }
+            }
             chunks.Add(CreateTrack(song.Tracks[index], events));
         }
 
