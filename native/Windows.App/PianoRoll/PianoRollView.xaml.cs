@@ -19,11 +19,26 @@ public sealed partial class PianoRollView : UserControl
     private const int BeatsPerBar = 4;
     private const int SixteenthsPerBeat = 4;
     private const int PitchCount = 128;
+    private const byte DefaultDrumPitch = 36;
+    private const byte DrumLaneCenter = 42;
+    private const int FirstGmDrumPitch = 35;
     private const double RowHeight = 24;
     private const double BeatWidth = 96;
     private const double KeyboardWidth = 68;
+    private const double DrumKeyboardWidth = 122;
     private const double TimelineHeight = 30;
     private static readonly string[] PitchNames = ["C", "C♯", "D", "D♯", "E", "F", "F♯", "G", "G♯", "A", "A♯", "B"];
+    private static readonly string[] DrumNames =
+    [
+        "Acoustic Kick", "Kick", "Side Stick", "Snare", "Hand Clap", "Electric Snare",
+        "Low Floor Tom", "Closed Hi-Hat", "High Floor Tom", "Pedal Hi-Hat", "Low Tom", "Open Hi-Hat",
+        "Low-Mid Tom", "Hi-Mid Tom", "Crash Cymbal 1", "High Tom", "Ride Cymbal 1", "Chinese Cymbal",
+        "Ride Bell", "Tambourine", "Splash Cymbal", "Cowbell", "Crash Cymbal 2", "Vibraslap",
+        "Ride Cymbal 2", "High Bongo", "Low Bongo", "Mute High Conga", "Open High Conga", "Low Conga",
+        "High Timbale", "Low Timbale", "High Agogo", "Low Agogo", "Cabasa", "Maracas",
+        "Short Whistle", "Long Whistle", "Short Güiro", "Long Güiro", "Claves", "High Wood Block",
+        "Low Wood Block", "Mute Cuíca", "Open Cuíca", "Mute Triangle", "Open Triangle"
+    ];
 
     private readonly Dictionary<long, Border> _noteViews = [];
     private readonly Rectangle _rulerCursor = new() { Width = 2, Height = TimelineHeight };
@@ -47,6 +62,8 @@ public sealed partial class PianoRollView : UserControl
 
     private double CellWidth => BeatWidth / _cellsPerBeat;
     private long TicksPerBar => (long)BeatsPerBar * _ticksPerBeat;
+    private bool ShowsDrumLanes => _defaultChannel == SongTrackEditor.DrumChannel;
+    private double LaneLabelWidth => ShowsDrumLanes ? DrumKeyboardWidth : KeyboardWidth;
 
     public PianoRollView()
     {
@@ -104,16 +121,24 @@ public sealed partial class PianoRollView : UserControl
         document.Changed += RefreshDocument;
         _ticksPerBeat = ticksPerQuarter;
         _cellsPerBeat = Math.Min(ticksPerQuarter, SixteenthsPerBeat);
+        bool previousDrumMode = ShowsDrumLanes;
         _defaultChannel = defaultChannel;
+        if (ShowsDrumLanes != previousDrumMode)
+        {
+            PitchColumn.Width = new GridLength(LaneLabelWidth);
+            PitchHeader.Text = ShowsDrumLanes ? "Drum" : "Pitch";
+            PaintPitchLanes();
+        }
         GridLabel.Text = _cellsPerBeat == SixteenthsPerBeat ? "4-beat ruler  ·  1/16 edit grid" : "4-beat ruler  ·  1-tick edit grid";
         _selected = null;
         var firstNote = document.Notes.Count == 0
-            ? new SongNote(0, 0, defaultChannel, 60, 96)
+            ? new SongNote(0, 0, defaultChannel, ShowsDrumLanes ? DefaultDrumPitch : (byte)60, 96)
             : document.Notes.MinBy(item => item.Note.StartTick).Note;
         _entryTick = firstNote.StartTick;
         _entryPitch = firstNote.NoteNumber;
         RefreshDocument();
-        QueueReveal(_playhead ?? firstNote.StartTick, firstNote.NoteNumber, recenter: true);
+        byte center = ShowsDrumLanes && firstNote.NoteNumber is >= 35 and <= 46 ? DrumLaneCenter : firstNote.NoteNumber;
+        QueueReveal(_playhead ?? firstNote.StartTick, center, recenter: true);
     }
 
     public void SetTimelineEnd(long tick)
@@ -206,10 +231,11 @@ public sealed partial class PianoRollView : UserControl
         for (int pitch = 0; pitch < PitchCount; pitch++)
         {
             double y = PitchY(pitch);
-            if (IsAccidental(pitch))
+            bool shaded = ShowsDrumLanes ? (pitch & 1) != 0 : IsAccidental(pitch);
+            if (shaded)
                 AddRect(GridLayer, 0, y, Surface.Width, RowHeight, _palette.AccidentalLane);
             AddRect(GridLayer, 0, y + RowHeight - 1, Surface.Width, 1,
-                pitch % 12 == 0 ? _palette.MajorLine : _palette.MinorLine);
+                !ShowsDrumLanes && pitch % 12 == 0 ? _palette.MajorLine : _palette.MinorLine);
         }
     }
 
@@ -221,7 +247,7 @@ public sealed partial class PianoRollView : UserControl
             return;
 
         Timeline.Clip = new RectangleGeometry { Rect = new Rect(0, 0, width, TimelineHeight) };
-        PitchKeys.Clip = new RectangleGeometry { Rect = new Rect(0, 0, KeyboardWidth, height) };
+        PitchKeys.Clip = new RectangleGeometry { Rect = new Rect(0, 0, LaneLabelWidth, height) };
         Timeline.Children.Clear();
         PitchKeys.Children.Clear();
         BeatLayer.Children.Clear();
@@ -253,15 +279,29 @@ public sealed partial class PianoRollView : UserControl
         {
             int pitch = PitchCount - 1 - row;
             double y = row * RowHeight - top;
-            bool accidental = IsAccidental(pitch);
-            AddRect(PitchKeys, 0, y, KeyboardWidth - 1, RowHeight - 1, _palette.NaturalKey);
-            if (accidental)
-                AddRect(PitchKeys, 0, y, KeyboardWidth - 9, RowHeight - 1, _palette.AccidentalKey);
-            AddCaption(PitchKeys, Caption(pitch), 10, y + 4,
-                accidental ? _palette.AccidentalKeyText : _palette.NaturalKeyText, pitch % 12 == 0);
+            PaintPitchLabel(pitch, y);
         }
         RefreshPlayhead();
         RefreshLoopRangeVisuals();
+    }
+
+    private void PaintPitchLabel(int pitch, double y)
+    {
+        if (ShowsDrumLanes)
+        {
+            AddRect(PitchKeys, 0, y, LaneLabelWidth - 1, RowHeight - 1,
+                (pitch & 1) != 0 ? _palette.AccidentalLane : _palette.Ruler);
+            AddCaption(PitchKeys, Caption(pitch, percussion: true), 10, y + 4, _palette.RulerText,
+                pitch is 36 or 38 or 42 or 46);
+            return;
+        }
+
+        bool accidental = IsAccidental(pitch);
+        AddRect(PitchKeys, 0, y, KeyboardWidth - 1, RowHeight - 1, _palette.NaturalKey);
+        if (accidental)
+            AddRect(PitchKeys, 0, y, KeyboardWidth - 9, RowHeight - 1, _palette.AccidentalKey);
+        AddCaption(PitchKeys, Caption(pitch, percussion: false), 10, y + 4,
+            accidental ? _palette.AccidentalKeyText : _palette.NaturalKeyText, pitch % 12 == 0);
     }
 
     private void PaintNotes()
@@ -315,8 +355,11 @@ public sealed partial class PianoRollView : UserControl
         Canvas.SetLeft(border, TickX(note.StartTick));
         Canvas.SetTop(border, PitchY(note.NoteNumber) + 2);
         Canvas.SetZIndex(border, selected ? 1 : 0);
-        string name = Caption(note.NoteNumber);
+        bool percussion = note.Channel == SongTrackEditor.DrumChannel;
+        string name = Caption(note.NoteNumber, percussion);
         AutomationProperties.SetName(border, $"{name}, tick {note.StartTick}, length {note.LengthTicks} ticks");
+        if (percussion)
+            ToolTipService.SetToolTip(border, $"{name} · MIDI note {note.NoteNumber}");
         var body = (Grid)border.Child;
         var label = (TextBlock)body.Children[0];
         label.Text = name;
@@ -335,7 +378,7 @@ public sealed partial class PianoRollView : UserControl
         {
             var note = _preview ?? active.Value.Note;
             string beat = $"{note.StartTick / TicksPerBar + 1}.{note.StartTick % TicksPerBar / _ticksPerBeat + 1}";
-            SelectionText.Text = $"{Caption(note.NoteNumber)} · {beat} · {note.LengthTicks} ticks";
+            SelectionText.Text = $"{Caption(note.NoteNumber, note.Channel == SongTrackEditor.DrumChannel)} · {beat} · {note.LengthTicks} ticks";
         }
         else
         {
@@ -651,7 +694,14 @@ public sealed partial class PianoRollView : UserControl
     private double TickX(long tick) => tick * (BeatWidth / _ticksPerBeat);
     private static double PitchY(int pitch) => (PitchCount - 1 - pitch) * RowHeight;
     private static bool IsAccidental(int pitch) => pitch % 12 is 1 or 3 or 6 or 8 or 10;
-    private static string Caption(int pitch) => $"{PitchNames[pitch % 12]}{pitch / 12 - 1}";
+    private static string Caption(int pitch, bool percussion)
+    {
+        if (!percussion)
+            return $"{PitchNames[pitch % 12]}{pitch / 12 - 1}";
+
+        int index = pitch - FirstGmDrumPitch;
+        return index >= 0 && index < DrumNames.Length ? DrumNames[index] : $"MIDI {pitch}";
+    }
     private static bool IsDown(VirtualKey key) => (InputKeyboardSource.GetKeyStateForCurrentThread(key) & CoreVirtualKeyStates.Down) != 0;
 
     private static void AddRect(Canvas canvas, double x, double y, double width, double height, Brush fill)

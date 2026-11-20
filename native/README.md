@@ -14,7 +14,7 @@ dotnet run --project native/Windows.App -c Release
 
 ### Open, edit, and play a MIDI file
 
-- Select **Open MIDI…** to open a `.mid` or `.midi` file. Use **Track** to choose which part appears in the piano roll. **Save** updates the current file. Use **Save as…** to write a copy.
+- Select **Open MIDI…** to open a `.mid` or `.midi` file. Select a track in the **Tracks** panel to edit it in the piano roll. **Save** updates the current file. Use **Save as…** to write a copy.
 - Click an empty grid cell or select **Add note** to add a note. Drag a note to move it, or drag its right edge to resize it. Horizontal edits use a sixteenth-note grid based on the file's tick resolution. The ruler groups beats in fours.
 - Select a note and press Delete to remove it. Use **Undo** or Ctrl+Z to step back one edit. The arrow keys move the selected note. Shift+Left and Shift+Right change its length.
 - Select **Play song** to hear all tracks from the beginning using the file's tempo map. Edits made during playback take effect on the next play. Press **Stop** to end playback early.
@@ -23,6 +23,13 @@ dotnet run --project native/Windows.App -c Release
 To open a file at launch, run `dotnet run --project native/Windows.App -c Release -- "C:/Music/example.mid"`.
 
 The adapter supports MIDI formats 0 and 1 with PPQ timing. Convert SMPTE-timed files to PPQ and choose one sequence from a format 2 file before opening it. Saving retains source track order, tick resolution, tempo events, and existing non-note events such as time signatures and program changes. Playback renders General MIDI program changes and the controllers supported by MeltySynth. SysEx is retained on save.
+
+### Tracks and sounds
+
+- Use **Add instrument** to assign an available melodic MIDI channel, or **Add drums** to create a percussion track on channel 10. Drum tracks show General MIDI labels such as kick, snare, and hi-hat in the piano roll.
+- Select a track and choose an **Instrument** or **Drum kit** from the loaded SoundFont. The picker sets the starting bank and program for the displayed MIDI channel and keeps later program changes. Tracks on a shared channel use the same starting sound. Start playback again to hear the change.
+- **Rename…** and **Remove track** operate on the selected track. **Undo track edit** reverses track and sound changes. The piano roll's **Undo** still applies to note edits in the current track. A song keeps at least one track.
+- MIDI save writes the track list, names, bank/program assignments, and notes. A one-track file saves as format 0 and a song with multiple tracks saves as format 1. Removing a track that carried tempo or meter events preserves those song-wide events. The SF2 file itself stays separate from the MIDI file.
 
 ### Loop playback
 
@@ -35,10 +42,12 @@ The adapter supports MIDI formats 0 and 1 with PPQ timing. Convert SMPTE-timed f
 
 1. On the **Recording test** tab, choose **Audio output** and **MIDI input**. **Play test note** exercises the monitor with synthetic MIDI if a keyboard is unavailable.
 2. Use **Load SoundFont…** to select an SF2. The app starts with the same `A320U.sf2` General MIDI bank as packaged Electron Signal. [A320U license](../electron/assets/soundfonts/A320U-license.txt)
-3. Turn on **Metronome** to hear the click. Select **Record test**, play several notes, then select **Stop recording**. **Raw (ms)** and **Adjusted (ms)** show timing before and after compensation, measured against the beat listed in the row. Positive values indicate a late note. A positive **Recording offset (ms)** shifts the saved note earlier. **Quantize** snaps **Start tick** to the selected grid after compensation and preserves **Length (ms)**.
+3. Turn on **Metronome** to hear the click. Select **Record test**, play several notes, then select **Stop recording**. **Raw (ms)** and **Adjusted (ms)** show timing before and after compensation, measured against the beat listed in the row. Positive values indicate a late note. A positive **Recording offset (ms)** shifts the saved note earlier. **Quantize** snaps **Start tick** to the selected grid after compensation and preserves **Length (ms)**. The take uses the MIDI channel of the track selected when recording began.
 4. Note the actual sample rate, engine period, and buffer capacity reported for the output device. Start with **Minimum**. If the output exhibits gaps on this endpoint under the target workload, repeat with **Conservative** and then **Default** until the run is clean. Record the actual values for each comparison. Frames divided by sample rate give the corresponding duration in seconds. The period is the render cadence and the capacity is the endpoint's allocated buffer size. [Microsoft low-latency audio documentation](https://learn.microsoft.com/en-us/windows-hardware/drivers/audio/low-latency-audio)
 
 ### Workspace verification
+
+All 45 Release tests passed after adding track controls. In the WinUI demo, adding, changing the sound of, removing, and undoing a temporary track restored its preset and the clean document state. A separate MIDI round trip preserved the tempo changes and played piano, organ, and the Electronic kit through WASAPI with zero estimated underruns or clock failures.
 
 All 39 Release tests passed. On the Remote Audio endpoint, a two-track MIDI passage repeated across a 120-to-90 BPM tempo change. All ten measured metronome onsets landed within one sample of their expected positions over three wraps. Both tracks rendered through A320U. Turning Loop off mid-pass let the song finish, with zero estimated underruns and clock failures.
 

@@ -34,16 +34,16 @@ public sealed partial class MainWindow : Window
     private bool _loadingBank;
     private bool _audioFailed;
     private int _noteCount;
-    private int _captureTrack;
+    private EditableSongTrack? _captureTrack;
     private long _takeId;
-    private (int Track, SongNote Note)? _firstImportedNote;
+    private (EditableSongTrack Track, SongNote Note)? _firstImportedNote;
     private string? _playbackError;
 
     public MainWindow(string? startupMidiPath = null)
     {
         InitializeComponent();
         _startupMidiPath = startupMidiPath;
-        AppWindow.Resize(new SizeInt32(1120, 760));
+        AppWindow.Resize(new SizeInt32(1200, 780));
         TakeList.ItemsSource = _rows;
         RollView.LoopRangeSelected += LoopRangeSelected;
         WorkspaceTabs.Loaded += OnLoaded;
@@ -55,7 +55,7 @@ public sealed partial class MainWindow : Window
         _playheadTimer = DispatcherQueue.CreateTimer();
         _playheadTimer.Interval = TimeSpan.FromMilliseconds(33);
         _playheadTimer.Tick += (_, _) => UpdatePlayhead();
-        ReplaceSong(new Song(_songTempo, [new SongTrack("Track 1", [])]));
+        ReplaceSong(new Song(TempoMap.Constant(120), [new SongTrack("Track 1", [], [new(0, 0xc0, 0, 0)])]));
     }
 
     private async void OnLoaded(object sender, RoutedEventArgs args)
@@ -242,6 +242,7 @@ public sealed partial class MainWindow : Window
                 ? new SoundFontPiano(bank, output.SampleRate)
                 : null;
             _bank = bank;
+            RefreshTrackSound();
             string name = Path.GetFileName(path);
             SoundFontText.Text = _output is not null && piano is null
                 ? $"{name} requires a 16–192 kHz output"
@@ -321,7 +322,7 @@ public sealed partial class MainWindow : Window
             _rows.Clear();
             _capturedNotes.Clear();
             _firstImportedNote = null;
-            _captureTrack = TrackBox.SelectedIndex;
+            _captureTrack = _selectedTrack;
             _noteCount = 0;
             var offset = double.IsFinite(OffsetBox.Value) ? OffsetBox.Value : 10;
             var division = QuantizeBox.SelectedIndex switch { 1 => 4, 2 => 8, 3 => 16, _ => 0 };
@@ -338,7 +339,7 @@ public sealed partial class MainWindow : Window
         WorkspaceTabs.SelectedItem = PianoRollTab;
         if (_firstImportedNote is { } take)
         {
-            TrackBox.SelectedIndex = take.Track;
+            SelectTrack(take.Track);
             RollView.RevealTick(take.Note.StartTick, take.Note.NoteNumber);
         }
     }
@@ -440,12 +441,12 @@ public sealed partial class MainWindow : Window
 
     private void AddTakeToPianoRoll(int ticksPerQuarter)
     {
-        if (_capturedNotes.Count == 0)
+        if (_capturedNotes.Count == 0 || _captureTrack is not { } track)
             return;
 
         long captureBar = 4L * ticksPerQuarter;
-        long songBar = 4L * _songTempo.TicksPerQuarter;
-        var document = _tracks[_captureTrack].Document;
+        long songBar = 4L * SongTempo.TicksPerQuarter;
+        var document = track.Document;
         var first = _capturedNotes.MinBy(note => note.StartTick);
         long sourceBar = first.StartTick / captureBar * captureBar;
         long rollEnd = document.Notes
@@ -455,18 +456,19 @@ public sealed partial class MainWindow : Window
         long targetBar = rollEnd == 0 ? 0 : ((rollEnd - 1) / songBar + 1) * songBar;
         document.Append(_capturedNotes.Select(ShiftNote));
         var imported = ShiftNote(first);
-        _firstImportedNote = (_captureTrack, imported);
+        _firstImportedNote = (track, imported);
         _capturedNotes.Clear();
-        if (WorkspaceTabs.SelectedIndex == 0 && TrackBox.SelectedIndex == _captureTrack)
+        if (WorkspaceTabs.SelectedIndex == 0 && ReferenceEquals(_selectedTrack, track))
             RollView.RevealTick(imported.StartTick, imported.NoteNumber);
 
         SongNote ShiftNote(SongNote note)
         {
-            double scale = _songTempo.TicksPerQuarter / (double)ticksPerQuarter;
+            double scale = SongTempo.TicksPerQuarter / (double)ticksPerQuarter;
             return note with
             {
                 StartTick = targetBar + (long)Math.Round((note.StartTick - sourceBar) * scale, MidpointRounding.AwayFromZero),
-                LengthTicks = Math.Max(1, (long)Math.Round(note.LengthTicks * scale, MidpointRounding.AwayFromZero))
+                LengthTicks = Math.Max(1, (long)Math.Round(note.LengthTicks * scale, MidpointRounding.AwayFromZero)),
+                Channel = track.PrimaryChannel
             };
         }
     }
@@ -482,7 +484,8 @@ public sealed partial class MainWindow : Window
         SongMetronomeButton.IsEnabled = audioReady;
         RecordButton.IsEnabled = audioReady && !_finishingTake && !_fileBusy;
         RecordButton.Content = _recording ? "Stop recording" : "Record test";
-        ShowTakeButton.IsEnabled = _firstImportedNote is not null && !takeInProgress && !_fileBusy;
+        ShowTakeButton.IsEnabled = _firstImportedNote is { } take && FindTrackIndex(take.Track) >= 0 &&
+            !takeInProgress && !_fileBusy;
         AudioDeviceBox.IsEnabled = !takeInProgress;
         PeriodBox.IsEnabled = !takeInProgress;
         MidiDeviceBox.IsEnabled = !takeInProgress;
@@ -490,6 +493,7 @@ public sealed partial class MainWindow : Window
         OffsetBox.IsEnabled = !takeInProgress;
         QuantizeBox.IsEnabled = !takeInProgress;
         UpdateFileControls();
+        UpdateTrackControls();
         UpdatePlaybackControls();
     }
 
@@ -498,7 +502,7 @@ public sealed partial class MainWindow : Window
         bool audioReady = _output is { SampleRate: >= 16000 and <= 192000 } && !_audioFailed;
         bool takeInProgress = _recording || _finishingTake;
         PlayButton.IsEnabled = audioReady && _bank is not null && !_playing && !takeInProgress && !_fileBusy
-            && _tracks.Any(track => track.Document.Notes.Count > 0);
+            && _trackEditor.Tracks.Any(track => track.Document.Notes.Count > 0);
         StopButton.IsEnabled = audioReady && _playing;
         LoopButton.IsEnabled = !_fileBusy && !takeInProgress;
         ClearLoopRangeButton.IsEnabled = !_fileBusy;

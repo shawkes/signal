@@ -55,12 +55,12 @@
                     <RowDefinition Height="*" />
                 </Grid.RowDefinitions>
                 <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="68" />
+                    <ColumnDefinition x:Name="PitchColumn" Width="68" />
                     <ColumnDefinition Width="*" />
                 </Grid.ColumnDefinitions>
                 <Border x:Name="Corner" BorderThickness="0,0,1,1"
                         BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}">
-                    <TextBlock Text="Pitch" Margin="10,0,0,0" VerticalAlignment="Center"
+                    <TextBlock x:Name="PitchHeader" Text="Pitch" Margin="10,0,0,0" VerticalAlignment="Center"
                                Style="{StaticResource CaptionTextBlockStyle}" />
                 </Border>
                 <Grid x:Name="RulerInput" Grid.Column="1"
@@ -91,7 +91,7 @@
                             <Rectangle x:Name="GridLoopShade" Visibility="Collapsed" />
                         </Canvas>
                         <Canvas x:Name="BeatLayer" IsHitTestVisible="False" />
-                        <Canvas x:Name="NotesLayer" IsHitTestVisible="False" />
+                        <Canvas x:Name="NotesLayer" />
                         <Canvas x:Name="TransportLayer" IsHitTestVisible="False">
                             <Rectangle x:Name="Cursor" Width="2" Visibility="Collapsed" />
                         </Canvas>

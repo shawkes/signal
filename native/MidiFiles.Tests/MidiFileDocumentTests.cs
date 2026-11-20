@@ -111,6 +111,96 @@ public sealed class MidiFileDocumentTests : IDisposable
     }
 
     [Fact]
+    public void AddingADrumTrackUpgradesFormat0AndWritesEditedSoundBeforeTheFirstNote()
+    {
+        string input = InDirectory("original.mid");
+        string output = InDirectory("tracks.mid");
+        WriteFixture(input, MidiFileFormat.SingleTrack, new TicksPerQuarterNoteTimeDivision(960),
+            new TrackChunk(
+                new SequenceTrackNameEvent("Piano"),
+                new SetTempoEvent(500_000),
+                new ControlChangeEvent((SevenBitNumber)0, (SevenBitNumber)2),
+                new ProgramChangeEvent((SevenBitNumber)5),
+                new ControlChangeEvent((SevenBitNumber)64, (SevenBitNumber)127),
+                NoteOn(60, 92, 0, 0),
+                NoteOff(60, 37, 0, 120),
+                new ProgramChangeEvent((SevenBitNumber)10) { DeltaTime = 120 },
+                new SetTempoEvent(740_000) { DeltaTime = 720 }));
+
+        var source = MidiFileDocument.Read(input);
+        var original = Assert.Single(source.Song.Tracks);
+        var lead = new SongTrack("Mélodie", original.Notes,
+            [
+                new SongChannelMessage(0, 0xB0, 0, 9),
+                new SongChannelMessage(0, 0xC0, 5, 0),
+                new SongChannelMessage(0, 0xB0, 64, 127),
+                new SongChannelMessage(240, 0xC0, 10, 0)
+            ], original.EndTick);
+        var drums = new SongTrack("Drums", [new SongNote(0, 80, 9, 38, 110)],
+            [new SongChannelMessage(0, 0xB9, 0, 0), new SongChannelMessage(0, 0xC9, 16, 0)]);
+
+        source.Write(output, new Song(source.Song.TempoMap, [lead, drums]), [0, null]);
+
+        var raw = ReadRaw(output);
+        Assert.Equal(MidiFileFormat.MultiTrack, raw.OriginalFormat);
+        var leadEvents = raw.GetTrackChunks().First().GetTimedEvents();
+        Assert.Collection(leadEvents.Where(item => item.Time == 0 && item.Event is ChannelEvent).Select(item => item.Event),
+            item => Assert.Equal((SevenBitNumber)9, Assert.IsType<ControlChangeEvent>(item).ControlValue),
+            item => Assert.Equal((SevenBitNumber)5, Assert.IsType<ProgramChangeEvent>(item).ProgramNumber),
+            item => Assert.Equal((SevenBitNumber)64, Assert.IsType<ControlChangeEvent>(item).ControlNumber),
+            item => Assert.IsType<NoteOnEvent>(item));
+        Assert.Equal((SevenBitNumber)37, Assert.IsType<NoteOffEvent>(leadEvents.Single(item => item.Time == 120).Event).Velocity);
+
+        var reopened = MidiFileDocument.Read(output).Song;
+        Assert.Equal(960, reopened.TempoMap.TicksPerQuarter);
+        Assert.Equal(source.Song.TempoMap.Changes, reopened.TempoMap.Changes);
+        Assert.Equal(new[] { lead.Name, drums.Name }, reopened.Tracks.Select(track => track.Name));
+        Assert.Equal(lead.PlaybackMessages, reopened.Tracks[0].PlaybackMessages);
+        Assert.Equal(drums.PlaybackMessages, reopened.Tracks[1].PlaybackMessages);
+        Assert.Equal(drums.Notes, reopened.Tracks[1].Notes);
+    }
+
+    [Fact]
+    public void DeletingATempoBearingTrackRetainsGlobalTimingAndOnlyTheSelectedParts()
+    {
+        string input = InDirectory("original.mid");
+        string output = InDirectory("tracks.mid");
+        var removed = new TrackChunk(
+            new SequenceTrackNameEvent("Removed conductor and notes"),
+            new SetTempoEvent(510_000),
+            new TimeSignatureEvent(3, 4),
+            NoteOn(40, 90, 1, 10),
+            NoteOff(40, 0, 1, 20),
+            new MarkerEvent("Removed local marker"),
+            new SetTempoEvent(660_000) { DeltaTime = 450 },
+            new KeySignatureEvent(2, 0) { DeltaTime = 240 });
+        var retained = new TrackChunk(
+            new SequenceTrackNameEvent("Retained"),
+            new MarkerEvent("Retained local marker") { DeltaTime = 72 },
+            new SetTempoEvent(720_000) { DeltaTime = 408 },
+            NoteOn(62, 92, 3, 0),
+            NoteOff(62, 31, 3, 240));
+        WriteFixture(input, MidiFileFormat.MultiTrack, new TicksPerQuarterNoteTimeDivision(480), removed, retained);
+        var source = MidiFileDocument.Read(input);
+
+        source.Write(output, new Song(source.Song.TempoMap, [source.Song.Tracks[1]]), [1]);
+
+        var reopened = MidiFileDocument.Read(output).Song;
+        Assert.Equal(source.Song.TempoMap.Changes, reopened.TempoMap.Changes);
+        var track = Assert.Single(reopened.Tracks);
+        Assert.Equal("Retained", track.Name);
+        Assert.Equal(source.Song.Tracks[1].Notes, track.Notes);
+        var raw = ReadRaw(output);
+        Assert.Equal(MidiFileFormat.SingleTrack, raw.OriginalFormat);
+        var events = Assert.Single(raw.GetTrackChunks()).GetTimedEvents();
+        Assert.Equal(720, events.Single(item => item.Event is KeySignatureEvent).Time);
+        Assert.Equal(0, events.Single(item => item.Event is TimeSignatureEvent).Time);
+        Assert.Equal(new[] { 510_000L, 660_000L, 720_000L }, events.Select(item => item.Event)
+            .OfType<SetTempoEvent>().Select(tempo => tempo.MicrosecondsPerQuarterNote));
+        Assert.Equal("Retained local marker", Assert.Single(events.Select(item => item.Event).OfType<MarkerEvent>()).Text);
+    }
+
+    [Fact]
     public void WritesNewSongsAndLeavesDestinationAloneOnFailure()
     {
         string output = InDirectory("new.mid");

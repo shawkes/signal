@@ -9,79 +9,46 @@ namespace Signal.Native.Windows.App;
 
 public sealed partial class MainWindow
 {
-    private readonly List<EditableTrack> _tracks = [];
-    private TempoMap _songTempo = TempoMap.Constant(120);
     private long _songEndTick;
     private MidiFileDocument? _sourceFile;
     private string? _songPath;
-    private bool _changingTrackList;
     private bool _fileBusy;
     private bool _allowClose;
 
     private string SongName => _songPath is null ? "Untitled" : Path.GetFileName(_songPath);
-    private bool SongIsDirty => _tracks.Any(track => track.Document.Revision != track.SavedRevision);
+    private bool SongIsDirty => _trackEditor.IsDirty;
 
     private void ReplaceSong(Song song, MidiFileDocument? source = null, string? path = null)
     {
-        if (song.Tracks.Count == 0)
-            throw new InvalidDataException("The MIDI file has no tracks.");
-
-        var tracks = song.Tracks.Select(track => new EditableTrack(track)).ToArray();
+        var editor = new SongTrackEditor(song, imported: source is not null);
         StopSongPlayback();
-        foreach (var track in _tracks)
-            track.Document.Changed -= SongEdited;
-        _tracks.Clear();
-        _tracks.AddRange(tracks);
-        _songTempo = song.TempoMap;
+        if (_trackEditor is not null)
+        {
+            _trackEditor.Changed -= SongEdited;
+            _trackEditor.TracksChanged -= TrackPanelChanged;
+        }
+        _trackEditor = editor;
+        editor.Changed += SongEdited;
+        editor.TracksChanged += TrackPanelChanged;
         _sourceFile = source;
         _songPath = path;
+        _captureTrack = null;
         _firstImportedNote = null;
         _playbackError = null;
         _loopRange = null;
         _loopEnabled = false;
 
-        _changingTrackList = true;
-        try
-        {
-            TrackBox.Items.Clear();
-            for (int i = 0; i < _tracks.Count; i++)
-            {
-                string name = _tracks[i].Source.Name;
-                string number = $"Track {i + 1}";
-                TrackBox.Items.Add(string.IsNullOrWhiteSpace(name) || name == number ? number : $"{number} · {name}");
-                _tracks[i].Document.Changed += SongEdited;
-            }
-            TrackBox.SelectedIndex = Math.Max(0, _tracks.FindIndex(track => track.Document.Notes.Count > 0));
-        }
-        finally
-        {
-            _changingTrackList = false;
-        }
-
-        AttachSelectedTrack();
-        SongEdited();
-        double initialBpm = 60_000_000.0 / _songTempo.Changes[0].MicrosecondsPerQuarterNote;
-        int changes = _songTempo.Changes.Count - 1;
+        RefreshTrackPanel(editor.Tracks.FirstOrDefault(track => track.Document.Notes.Count > 0) ?? editor.Tracks[0]);
+        double initialBpm = 60_000_000.0 / SongTempo.Changes[0].MicrosecondsPerQuarterNote;
+        int changes = SongTempo.Changes.Count - 1;
         SongTempoText.Text = changes == 0 ? $"{initialBpm:0.#} BPM" :
             $"{initialBpm:0.#} BPM initially  ·  {changes} tempo {(changes == 1 ? "change" : "changes")}";
-        UpdateControls();
-    }
-
-    private void TrackChanged(object sender, SelectionChangedEventArgs args)
-    {
-        if (!_changingTrackList && TrackBox.SelectedIndex >= 0)
-            AttachSelectedTrack();
-    }
-
-    private void AttachSelectedTrack()
-    {
-        var track = _tracks[TrackBox.SelectedIndex];
-        RollView.Attach(track.Document, _songTempo.TicksPerQuarter, track.DefaultChannel);
+        SongEdited();
     }
 
     private void SongEdited()
     {
-        _songEndTick = _tracks.Max(track => Math.Max(track.Source.EndTick,
+        _songEndTick = _trackEditor.Tracks.Max(track => Math.Max(track.EndTick,
             track.Document.Notes.Select(item => item.Note)
                 .Select(note => note.LengthTicks == 0 && note.StartTick < long.MaxValue
                     ? note.StartTick + 1
@@ -89,7 +56,7 @@ public sealed partial class MainWindow
                 .DefaultIfEmpty().Max()));
         RollView.SetTimelineEnd(_songEndTick);
         UpdateSongName();
-        UpdatePlaybackControls();
+        UpdateControls();
         UpdateLoopDisplay();
     }
 
@@ -100,9 +67,7 @@ public sealed partial class MainWindow
         Title = $"Signal · {name}";
     }
 
-    private Song SnapshotSong() => new(_songTempo, _tracks.Select(track =>
-        new SongTrack(track.Source.Name, track.Document.CreatePlaybackSnapshot(),
-            track.Source.PlaybackMessages, track.Source.EndTick)));
+    private Song SnapshotSong() => _trackEditor.SnapshotSong();
 
     private async void OpenSongClicked(object sender, RoutedEventArgs args)
     {
@@ -176,17 +141,16 @@ public sealed partial class MainWindow
 
             Song song = SnapshotSong();
             var source = _sourceFile;
+            var sourceTrackIndices = _trackEditor.CreateSourceIndices();
             await Task.Run(() =>
             {
                 if (source is null)
                     MidiFileDocument.WriteNew(path, song);
                 else
-                    source.Write(path, song);
+                    source.Write(path, song, sourceTrackIndices);
             });
             _songPath = path;
-            foreach (var track in _tracks)
-                track.SavedRevision = track.Document.Revision;
-            UpdateSongName();
+            _trackEditor.MarkSaved();
             return true;
         }
         catch (Exception error)
@@ -271,7 +235,6 @@ public sealed partial class MainWindow
         OpenSongButton.IsEnabled = ready;
         SaveSongButton.IsEnabled = ready;
         SaveSongAsButton.IsEnabled = ready;
-        TrackBox.IsEnabled = !_fileBusy;
     }
 
     private void ShowFileError(string title, Exception error)
@@ -279,14 +242,5 @@ public sealed partial class MainWindow
         FileErrorBar.Title = title;
         FileErrorBar.Message = error.Message;
         FileErrorBar.IsOpen = true;
-    }
-
-    private sealed class EditableTrack(SongTrack source)
-    {
-        public SongTrack Source { get; } = source;
-        public PianoRollDocument Document { get; } = new(source.Notes);
-        public long SavedRevision { get; set; }
-        public byte DefaultChannel { get; } = source.Notes.Count > 0 ? source.Notes[0].Channel :
-            (byte)(source.PlaybackMessages.FirstOrDefault().Status & 0x0F);
     }
 }

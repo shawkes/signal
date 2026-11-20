@@ -57,36 +57,73 @@ public sealed class MidiFileDocument
         return new MidiFileDocument(file, new Song(tempo, tracks.Select(track => track.Model)), tracks);
     }
 
-    /// <summary>Saves an edited song using the original file's tracks, metadata and SMF format.</summary>
+    /// <summary>Saves an edited song using the original file's track metadata.</summary>
     public void Write(string path, Song song)
     {
         ArgumentNullException.ThrowIfNull(song);
-        if (song.Tracks.Count != _tracks.Length || song.TempoMap.TicksPerQuarter != Song.TempoMap.TicksPerQuarter)
-            throw new ArgumentException("The edited song must keep the original tracks and tick division.", nameof(song));
+        if (song.Tracks.Count != _tracks.Length)
+            throw new ArgumentException("Track additions or removals require an original-track mapping.", nameof(song));
 
+        Write(path, song, Enumerable.Range(0, _tracks.Length).Select(index => (int?)index).ToArray());
+    }
+
+    /// <summary>Saves tracks in song order. A null source entry identifies a newly created track.</summary>
+    public void Write(string path, Song song, IReadOnlyList<int?> sourceTrackIndices)
+    {
+        ArgumentNullException.ThrowIfNull(song);
+        ArgumentNullException.ThrowIfNull(sourceTrackIndices);
+        if (song.Tracks.Count == 0 || song.Tracks.Count != sourceTrackIndices.Count)
+            throw new ArgumentException("Provide a source entry for each track and keep at least one track.", nameof(sourceTrackIndices));
+        if (song.TempoMap.TicksPerQuarter != Song.TempoMap.TicksPerQuarter)
+            throw new ArgumentException("The edited song must keep the original tick division.", nameof(song));
+
+        var usedSources = new HashSet<int>();
+        int previousSource = -1;
+        bool reordered = false;
+        foreach (var entry in sourceTrackIndices)
+        {
+            if (entry is not int index)
+                continue;
+            if (index < 0 || index >= _tracks.Length || !usedSources.Add(index))
+                throw new ArgumentException("Original track indices must be valid and unique.", nameof(sourceTrackIndices));
+            reordered |= index < previousSource;
+            previousSource = index;
+        }
+
+        // Preserve the original ordering of conflicting global events at the same tick, even
+        // when the track that carried one of them has been removed or moved.
+        bool relocateGlobals = reordered || Enumerable.Range(0, _tracks.Length).Any(index =>
+            !usedSources.Contains(index) && _tracks[index].Chunk.Events.Any(IsGlobalEvent));
         bool changeTempo = !song.TempoMap.Changes.SequenceEqual(Song.TempoMap.Changes);
+        var globalEvents = relocateGlobals ? CloneGlobalEvents(includeTempo: !changeTempo) : [];
+        if (changeTempo)
+            AddTempos(globalEvents, song.TempoMap.Changes);
+
+        var outputTracks = new TrackChunk[song.Tracks.Count];
+        for (int index = 0; index < outputTracks.Length; index++)
+        {
+            var edited = song.Tracks[index];
+            List<FileEvent> events = index == 0 ? globalEvents : [];
+            outputTracks[index] = sourceTrackIndices[index] is int sourceIndex
+                ? UpdateTrack(_tracks[sourceIndex], edited, events, relocateGlobals, changeTempo)
+                : CreateTrack(edited, events);
+        }
+
         var chunks = new List<MidiChunk>();
-        int trackIndex = 0;
+        int nextTrack = 0;
         foreach (var chunk in _source.Chunks)
         {
-            if (chunk is TrackChunk track)
-            {
-                var edited = song.Tracks[trackIndex];
-                var original = _tracks[trackIndex];
-                if (!original.Model.PlaybackMessages.SequenceEqual(edited.PlaybackMessages))
-                    throw new ArgumentException("The edited song must keep the original channel messages.", nameof(song));
-
-                var tempos = changeTempo && trackIndex == 0 ? song.TempoMap.Changes : [];
-                chunks.Add(UpdateTrack(track, original, edited, changeTempo, tempos));
-                trackIndex++;
-            }
-            else
-            {
+            if (chunk is not TrackChunk)
                 chunks.Add(chunk.Clone());
-            }
+            else if (nextTrack < outputTracks.Length)
+                chunks.Add(outputTracks[nextTrack++]);
         }
+        chunks.AddRange(outputTracks.Skip(nextTrack));
         var file = new MidiFile(chunks) { TimeDivision = _source.TimeDivision };
-        WriteAtomically(path, file, _source.OriginalFormat);
+        // DryWetMIDI splits one chunk into multiple tracks when asked to write format 1.
+        // Format 0 keeps a song with one surviving track as a single track.
+        var format = outputTracks.Length == 1 ? MidiFileFormat.SingleTrack : MidiFileFormat.MultiTrack;
+        WriteAtomically(path, file, format);
     }
 
     public static void WriteNew(string path, Song song)
@@ -100,16 +137,10 @@ public sealed class MidiFileDocument
         var chunks = new List<TrackChunk>(song.Tracks.Count);
         for (int index = 0; index < song.Tracks.Count; index++)
         {
-            var track = song.Tracks[index];
             var events = new List<FileEvent>();
-            if (!string.IsNullOrEmpty(track.Name))
-                events.Add(new FileEvent(0, CreateNameEvent(track.Name)));
             if (index == 0)
                 AddTempos(events, song.TempoMap.Changes);
-            foreach (var message in track.PlaybackMessages)
-                events.Add(new FileEvent(message.Tick, CreateChannelEvent(message)));
-            AddNotes(events, track.Notes);
-            chunks.Add(BuildTrack(events, track.EndTick));
+            chunks.Add(CreateTrack(song.Tracks[index], events));
         }
 
         var file = new MidiFile(chunks)
@@ -117,6 +148,35 @@ public sealed class MidiFileDocument
             TimeDivision = new TicksPerQuarterNoteTimeDivision((short)song.TempoMap.TicksPerQuarter)
         };
         WriteAtomically(path, file, chunks.Count == 1 ? MidiFileFormat.SingleTrack : MidiFileFormat.MultiTrack);
+    }
+
+    private static TrackChunk CreateTrack(SongTrack track, List<FileEvent> events)
+    {
+        if (!string.IsNullOrEmpty(track.Name))
+            events.Insert(0, new FileEvent(0, CreateNameEvent(track.Name)));
+        foreach (var message in track.PlaybackMessages)
+            events.Add(new FileEvent(message.Tick, CreateChannelEvent(message)));
+        AddNotes(events, track.Notes);
+        return BuildTrack(events, track.EndTick);
+    }
+
+    private static bool IsGlobalEvent(MidiEvent midiEvent) =>
+        midiEvent is SetTempoEvent or TimeSignatureEvent or KeySignatureEvent;
+
+    private List<FileEvent> CloneGlobalEvents(bool includeTempo)
+    {
+        var result = new List<FileEvent>();
+        foreach (var track in _tracks)
+        {
+            long tick = 0;
+            foreach (var midiEvent in track.Chunk.Events)
+            {
+                tick = checked(tick + midiEvent.DeltaTime);
+                if (IsGlobalEvent(midiEvent) && (includeTempo || midiEvent is not SetTempoEvent))
+                    result.Add(new FileEvent(tick, midiEvent.Clone()));
+            }
+        }
+        return result;
     }
 
     private static TrackSource ReadTrack(TrackChunk chunk)
@@ -151,11 +211,11 @@ public sealed class MidiFileDocument
         }
 
         var sourceNotes = notes.OrderBy(note => note.Note.StartTick).ToArray();
-        return new TrackSource(new SongTrack(name, sourceNotes.Select(note => note.Note), messages, tick), sourceNotes);
+        return new TrackSource(chunk, new SongTrack(name, sourceNotes.Select(note => note.Note), messages, tick), sourceNotes);
     }
 
-    private static TrackChunk UpdateTrack(TrackChunk chunk, TrackSource source, SongTrack edited, bool replaceTempo,
-        IReadOnlyList<TempoChange> tempos)
+    private static TrackChunk UpdateTrack(TrackSource source, SongTrack edited, List<FileEvent> events,
+        bool relocateGlobals, bool replaceTempo)
     {
         var remaining = edited.Notes.CountBy(note => note).ToDictionary();
         var removed = new HashSet<MidiEvent>(ReferenceEqualityComparer.Instance);
@@ -170,19 +230,28 @@ public sealed class MidiFileDocument
             }
         }
 
-        var events = new List<FileEvent>();
+        var chunk = source.Chunk;
+        var channelEdits = GetChannelEdits(source, edited);
         bool replaceName = edited.Name != source.Model.Name;
         var originalName = chunk.Events.OfType<SequenceTrackNameEvent>().FirstOrDefault();
         if (replaceName && originalName is null && !string.IsNullOrEmpty(edited.Name))
-            events.Add(new FileEvent(0, CreateNameEvent(edited.Name)));
-        AddTempos(events, tempos);
+            events.Insert(0, new FileEvent(0, CreateNameEvent(edited.Name)));
 
         long tick = 0;
         foreach (var midiEvent in chunk.Events)
         {
             tick = checked(tick + midiEvent.DeltaTime);
-            if (midiEvent is EndOfTrackEvent || removed.Contains(midiEvent) || (replaceTempo && midiEvent is SetTempoEvent))
+            if (midiEvent is EndOfTrackEvent || removed.Contains(midiEvent) ||
+                (relocateGlobals && IsGlobalEvent(midiEvent)) || (replaceTempo && midiEvent is SetTempoEvent))
                 continue;
+            if (midiEvent is ChannelEvent channelEvent && channelEdits.TryGetValue(tick, out var edit))
+            {
+                // Emit an edited bank/program sequence before attacks at this tick. Other ticks
+                // retain their original event order, including controller and note interleaving.
+                edit.Emit(events);
+                if (GetChannelMessage(tick, channelEvent) is not null)
+                    continue;
+            }
             if (replaceName && ReferenceEquals(midiEvent, originalName))
             {
                 if (!string.IsNullOrEmpty(edited.Name))
@@ -194,8 +263,41 @@ public sealed class MidiFileDocument
             }
         }
 
+        foreach (var edit in channelEdits.Values)
+            edit.Emit(events);
         AddNotes(events, remaining.SelectMany(entry => Enumerable.Repeat(entry.Key, entry.Value)));
         return BuildTrack(events, Math.Max(source.Model.EndTick, edited.EndTick));
+    }
+
+    private static Dictionary<long, ChannelEdit> GetChannelEdits(TrackSource source, SongTrack edited)
+    {
+        if (source.Model.PlaybackMessages.SequenceEqual(edited.PlaybackMessages))
+            return [];
+
+        var before = source.Model.PlaybackMessages.ToLookup(message => message.Tick);
+        var after = edited.PlaybackMessages.ToLookup(message => message.Tick);
+        var changedTicks = before.Select(group => group.Key).Union(after.Select(group => group.Key))
+            .Where(tick => !before[tick].SequenceEqual(after[tick])).ToHashSet();
+
+        var rawEvents = new Dictionary<SongChannelMessage, Queue<MidiEvent>>();
+        long time = 0;
+        foreach (var midiEvent in source.Chunk.Events)
+        {
+            time = checked(time + midiEvent.DeltaTime);
+            if (changedTicks.Contains(time) && midiEvent is ChannelEvent channel &&
+                GetChannelMessage(time, channel) is { } message)
+            {
+                if (!rawEvents.TryGetValue(message, out var matching))
+                    rawEvents.Add(message, matching = new Queue<MidiEvent>());
+                matching.Enqueue(midiEvent);
+            }
+        }
+
+        return changedTicks.ToDictionary(tick => tick, tick => new ChannelEdit(after[tick]
+            .Select(message => new FileEvent(tick,
+                rawEvents.TryGetValue(message, out var matching) && matching.TryDequeue(out var original)
+                    ? original.Clone()
+                    : CreateChannelEvent(message))).ToArray()));
     }
 
     private static void AddTempos(List<FileEvent> events, IReadOnlyList<TempoChange> tempos)
@@ -324,7 +426,20 @@ public sealed class MidiFileDocument
         }
     }
 
-    private sealed record TrackSource(SongTrack Model, SourceNote[] Notes);
+    private sealed class ChannelEdit(FileEvent[] messages)
+    {
+        private bool _emitted;
+
+        public void Emit(List<FileEvent> events)
+        {
+            if (_emitted)
+                return;
+            events.AddRange(messages);
+            _emitted = true;
+        }
+    }
+
+    private sealed record TrackSource(TrackChunk Chunk, SongTrack Model, SourceNote[] Notes);
     private readonly record struct SourceNote(SongNote Note, MidiEvent On, MidiEvent Off);
     private readonly record struct FileEvent(long Tick, MidiEvent Event, bool IsRelease = false);
 }

@@ -18,7 +18,6 @@
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto" />
                         <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
                     <StackPanel Orientation="Horizontal" Spacing="8">
                         <Button x:Name="OpenSongButton" Content="Open MIDI…" Click="OpenSongClicked" />
@@ -27,8 +26,6 @@
                     </StackPanel>
                     <TextBlock x:Name="SongNameText" Grid.Column="1" VerticalAlignment="Center"
                                TextTrimming="CharacterEllipsis" Style="{StaticResource BodyStrongTextBlockStyle}" />
-                    <ComboBox x:Name="TrackBox" Grid.Column="2" Header="Track" MinWidth="210" MaxWidth="280"
-                              SelectionChanged="TrackChanged" />
                 </Grid>
                 <InfoBar x:Name="FileErrorBar" Grid.Row="1" Severity="Error" IsOpen="False" />
                 <Grid Grid.Row="2" ColumnSpacing="14">
@@ -79,7 +76,67 @@
                     <TextBlock x:Name="SongTempoText" Grid.Column="2" VerticalAlignment="Center"
                                Style="{StaticResource BodyStrongTextBlockStyle}" />
                 </Grid>
-                <roll:PianoRollView x:Name="RollView" Grid.Row="3" />
+                <Grid Grid.Row="3" ColumnSpacing="14">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="272" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1"
+                            CornerRadius="8" Padding="12">
+                        <Grid RowSpacing="10">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="*" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+                            <Grid ColumnSpacing="6">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="Tracks" VerticalAlignment="Center"
+                                           Style="{StaticResource SubtitleTextBlockStyle}" />
+                                <Button x:Name="UndoTrackButton" Grid.Column="1" Content="Undo track edit"
+                                        Click="UndoTrackClicked" IsEnabled="False" />
+                            </Grid>
+                            <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="6">
+                                <Button x:Name="AddInstrumentButton" Content="Add instrument"
+                                        AutomationProperties.Name="Add instrument track" Click="AddInstrumentClicked" />
+                                <Button x:Name="AddDrumButton" Content="Add drums"
+                                        AutomationProperties.Name="Add drum track" Click="AddDrumClicked" />
+                            </StackPanel>
+                            <ListView x:Name="TrackList" Grid.Row="2" SelectionMode="Single"
+                                      SelectionChanged="TrackChanged" AutomationProperties.Name="Song tracks">
+                                <ListView.ItemTemplate>
+                                    <DataTemplate x:DataType="local:TrackRow">
+                                        <StackPanel Spacing="2" Margin="2,5">
+                                            <TextBlock Text="{x:Bind Name}" TextTrimming="CharacterEllipsis"
+                                                       Style="{StaticResource BodyStrongTextBlockStyle}" />
+                                            <TextBlock Text="{x:Bind Detail}" TextTrimming="CharacterEllipsis"
+                                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                                       Style="{StaticResource CaptionTextBlockStyle}" />
+                                        </StackPanel>
+                                    </DataTemplate>
+                                </ListView.ItemTemplate>
+                            </ListView>
+                            <StackPanel Grid.Row="3" Spacing="8">
+                                <TextBlock x:Name="TrackChannelText" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                                <ComboBox x:Name="TrackSoundBox" Header="Sound" HorizontalAlignment="Stretch"
+                                          SelectionChanged="TrackSoundChanged" />
+                                <TextBlock x:Name="TrackChannelHint" TextWrapping="Wrap" Visibility="Collapsed"
+                                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                           Style="{StaticResource CaptionTextBlockStyle}" />
+                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                    <Button x:Name="RenameTrackButton" Content="Rename…" Click="RenameTrackClicked" />
+                                    <Button x:Name="RemoveTrackButton" Content="Remove track" Click="RemoveTrackClicked" />
+                                </StackPanel>
+                            </StackPanel>
+                        </Grid>
+                    </Border>
+                    <roll:PianoRollView x:Name="RollView" Grid.Column="1" />
+                </Grid>
             </Grid>
         </TabViewItem>
         <TabViewItem Header="Recording test" IsClosable="False">

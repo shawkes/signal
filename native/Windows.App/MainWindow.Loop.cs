@@ -37,7 +37,7 @@ public sealed partial class MainWindow
     }
 
     private LoopRange? EnabledLoopRange(LoopRange? range, bool enabled, long endTick) =>
-        enabled ? range ?? new LoopRange(0, endTick > 0 ? endTick : _songTempo.TicksPerQuarter) : null;
+        enabled ? range ?? new LoopRange(0, endTick > 0 ? endTick : SongTempo.TicksPerQuarter) : null;
 
     private void UpdateLoopDisplay()
     {
@@ -52,7 +52,7 @@ public sealed partial class MainWindow
 
     private string BeatLabel(long tick)
     {
-        long beat = tick / _songTempo.TicksPerQuarter;
+        long beat = tick / SongTempo.TicksPerQuarter;
         return $"{beat / 4 + 1}.{beat % 4 + 1}";
     }
 }
