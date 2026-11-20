@@ -1,6 +1,6 @@
 # Signal Native piano roll
 
-The WinUI 3 prototype edits and plays a single piano-roll track. The recording test monitors a MIDI keyboard through a SoundFont piano, plays a 120 BPM metronome, and reports recorded note placement against the beat. The editor keeps notes and undo history in memory for the current session.
+The WinUI 3 prototype opens and saves Standard MIDI Files, edits notes one track at a time, and plays the whole song with its tempo changes. The recording test monitors a MIDI keyboard through a SoundFont piano, plays a 120 BPM metronome, and reports recorded note placement against the beat. Each track keeps its own undo history for the current session.
 
 ## Build and run
 
@@ -8,16 +8,21 @@ Use x64 Windows (build 19041 or newer) and the .NET 10 SDK. Run these commands f
 
 ```powershell
 dotnet build native/Signal.Native.slnx -c Release
-dotnet test native/Engine.Tests -c Release
+dotnet test native/Signal.Native.slnx -c Release
 dotnet run --project native/Windows.App -c Release
 ```
 
-### Edit and play notes
+### Open, edit, and play a MIDI file
 
-- Click an empty grid cell or select **Add note** to add a note. Drag a note to change its time or pitch, or drag its right edge to change its length. Horizontal moves and resizing use sixteenth-note increments and preserve the timing of notes recorded off the grid.
-- Select a note and use **Delete** or the Delete key to remove it. Use **Undo** or Ctrl+Z to step back one edit. The arrow keys move the selected note. Shift+Left and Shift+Right change its length.
-- Select **Play** to hear the current notes from the beginning. The playhead follows the audio timeline. Edits made during playback take effect on the next play. Use **Stop** to end playback early.
-- On the **Recording test** tab, finish a take and select **Show in piano roll**. Each take imports as one undoable edit at the next available bar, with timing measured from the bar containing its first note.
+- Select **Open MIDI…** to open a `.mid` or `.midi` file. Use **Track** to choose which part appears in the piano roll. **Save** updates the current file. Use **Save as…** to write a copy.
+- Click an empty grid cell or select **Add note** to add a note. Drag a note to move it, or drag its right edge to resize it. Horizontal edits use a sixteenth-note grid based on the file's tick resolution. The ruler groups beats in fours.
+- Select a note and press Delete to remove it. Use **Undo** or Ctrl+Z to step back one edit. The arrow keys move the selected note. Shift+Left and Shift+Right change its length.
+- Select **Play song** to hear all tracks from the beginning using the file's tempo map. Edits made during playback take effect on the next play. Press **Stop** to end playback early.
+- Finish a take on the **Recording test** tab and select **Show in piano roll**. The take appends as one undoable edit at the next available bar in the track selected when recording began.
+
+To open a file at launch, run `dotnet run --project native/Windows.App -c Release -- "C:/Music/example.mid"`.
+
+The adapter supports MIDI formats 0 and 1 with PPQ timing. Convert SMPTE-timed files to PPQ and choose one sequence from a format 2 file before opening it. Saving retains source track order, tick resolution, tempo events, and existing non-note events such as time signatures and program changes. Playback renders General MIDI program changes and the controllers supported by MeltySynth. SysEx is retained on save.
 
 ### Record a take
 
@@ -28,9 +33,11 @@ dotnet run --project native/Windows.App -c Release
 
 ### Workspace verification
 
+The Release build opened a two-track MIDI file at 101 PPQ with a tempo change. All 29 automated tests passed, including format 0 and 1 round trips and sample scheduling across tempo changes. A separate round-trip playback probe rendered piano and bass through WASAPI with zero estimated underruns and clock failures.
+
 The available **Remote Audio** endpoint negotiated 44,100 Hz stereo with event-driven `IAudioClient3` shared mode. The actual period was **441 frames (10.00 ms)** and the buffer capacity was **970 frames (22.00 ms)**. All three period settings negotiated the same values.
 
-- Twenty automated Release tests passed, covering recording timing, editing and undo, and sample-based playback. The WinUI app loaded a second SF2 through the picker and switched back to A320U. A synthetic C4 in the latency test showed +10.02 ms before and +0.02 ms after compensation with the default +10 ms offset.
+- The WinUI app loaded a second SF2 through the picker and switched back to A320U. A synthetic C4 in the latency test showed +10.02 ms before and +0.02 ms after compensation with the default +10 ms offset.
 - A piano-roll playback probe captured two synthetic notes, exercised the edits, and played three edited notes through A320U and the Remote Audio endpoint. It produced nonzero PCM, completed naturally, and stopped early on command in a second pass. The probe recorded zero estimated underruns and clock failures.
 - A headless run through A320U, MeltySynth, and WASAPI captured all 80 synthetic notes per pass with a +10 ms offset and a 1/16 grid. Both idle and loaded passes produced piano and metronome output with zero estimated underruns or clock failures and zero managed allocations on the audio thread after warmup. The loaded pass used eight busy CPU workers on 16 logical CPUs. A separate injected 90 ms render stall produced one estimated underrun, then the stream recovered.
 - An offline PCM check scheduled C4 at velocity 100 exactly on the click. The piano first crossed a 0.005 absolute sample-amplitude threshold 2.00 ms after the click at 44.1 kHz and 2.02 ms after it at 48 kHz. These values include the SoundFont attack and MeltySynth's internal render block.
@@ -43,14 +50,16 @@ Windows reported zero MIDI inputs. Physical key-to-sound median, p95, and compar
 | --- | --- |
 | `Engine` | Portable `net10.0` song model, tempo map, tick and sample conversions, timestamp mapping, scheduling, and recording. |
 | `Engine.Tests` | Synthetic clock, offset, quantization, and scheduling checks. |
+| `MidiFiles` | Portable Standard MIDI File adapter using DryWetMIDI's managed package. |
+| `MidiFiles.Tests` | Round-trip and MIDI format coverage. |
 | `SoundFont` | Portable MeltySynth adapter. It renders into preallocated buffers and consumes MIDI on the same render thread. MeltySynth generates audio in 16-frame internal blocks, about 0.33 ms at 48 kHz. [MeltySynth source](https://github.com/sinshu/meltysynth) |
 | `Windows.Audio` | Windows audio endpoints, event-driven shared-mode WASAPI, stream clock and render diagnostics. |
 | `Windows.Midi` | Windows MIDI inputs and receipt timestamps. |
-| `Windows.App` | WinUI device setup, SoundFont picker, monitor controls, and recording readout. |
+| `Windows.App` | WinUI piano roll, MIDI and SoundFont pickers, device setup, and recording readout. |
 
 The audio output supplies a frame-to-performance-counter anchor. The engine maps incoming MIDI timestamps to that presentation timeline for recording and plays monitoring events at the earliest writable frame. The metronome and synth share the render timeline. Offset and quantization change the saved placement. The stored note length comes from the uncompensated note-on and note-off interval.
 
-DryWetMIDI is a candidate for a portable Standard MIDI File adapter. Its `MidiFile.Read` and `Write` APIs cover SMF, and track chunks, notes, and tempo-map APIs expose useful data for conversion. Before adopting it, verify format 0 and 1 round trips with tempo and track metadata, channels, overlapping notes, and events the editor does not yet expose. Handle PPQ timing and specify how SMPTE time divisions import before relying on the conversion. Keep the conversion at the file boundary so `Engine` owns editing and timing. [DryWetMIDI source and documentation](https://github.com/melanchall/drywetmidi)
+The adapter uses DryWetMIDI to read and write the source event stream. It carries original track and event data across edits and replaces the destination only after writing the full file. The engine owns the portable song model, note editing, and scheduling. [DryWetMIDI source and documentation](https://github.com/melanchall/drywetmidi)
 
 ## Matched comparison with Electron
 

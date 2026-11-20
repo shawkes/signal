@@ -71,7 +71,7 @@
                               HorizontalContentAlignment="Left" VerticalContentAlignment="Top"
                               ZoomMode="Disabled" IsTabStop="False" BringIntoViewOnFocusChange="False"
                               ViewChanged="EditorViewChanged" SizeChanged="EditorSizeChanged">
-                    <Grid x:Name="Surface" PointerPressed="SurfacePointerPressed"
+                    <Grid x:Name="Surface" SizeChanged="EditorSizeChanged" PointerPressed="SurfacePointerPressed"
                           PointerMoved="SurfacePointerMoved" PointerReleased="SurfacePointerReleased"
                           PointerCaptureLost="SurfacePointerCanceled" PointerCanceled="SurfacePointerCanceled">
                         <Canvas x:Name="GridLayer" IsHitTestVisible="False" />
@@ -93,7 +93,8 @@
             <TextBlock Text="Click an empty cell to add. Drag a note to move it or its right edge to resize."
                        TextWrapping="Wrap" Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                        Style="{StaticResource CaptionTextBlockStyle}" />
-            <TextBlock Grid.Column="1" Text="1/16 edit grid" Style="{StaticResource CaptionTextBlockStyle}" />
+            <TextBlock x:Name="GridLabel" Grid.Column="1" Text="4-beat ruler  ·  1/16 edit grid"
+                       Style="{StaticResource CaptionTextBlockStyle}" />
         </Grid>
     </Grid>
 </UserControl>

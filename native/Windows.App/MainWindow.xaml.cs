@@ -17,10 +17,10 @@ namespace Signal.Native.Windows.App;
 public sealed partial class MainWindow : Window
 {
     private readonly ObservableCollection<TakeRow> _rows = [];
-    private readonly PianoRollDocument _document = new();
     private readonly List<SongNote> _capturedNotes = [];
     private readonly DispatcherQueueTimer _uiTimer;
     private readonly DispatcherQueueTimer _playheadTimer;
+    private readonly string? _startupMidiPath;
     private WasapiOutput? _output;
     private LatencyEngine? _engine;
     private WinMmInput? _midiInput;
@@ -34,19 +34,19 @@ public sealed partial class MainWindow : Window
     private bool _loadingBank;
     private bool _audioFailed;
     private int _noteCount;
+    private int _captureTrack;
     private long _takeId;
-    private SongNote? _firstImportedNote;
+    private (int Track, SongNote Note)? _firstImportedNote;
     private string? _playbackError;
 
-    public MainWindow()
+    public MainWindow(string? startupMidiPath = null)
     {
         InitializeComponent();
-        Title = "Signal · Piano roll";
+        _startupMidiPath = startupMidiPath;
         AppWindow.Resize(new SizeInt32(1120, 760));
         TakeList.ItemsSource = _rows;
-        RollView.Attach(_document);
-        _document.Changed += UpdatePlaybackControls;
         WorkspaceTabs.Loaded += OnLoaded;
+        AppWindow.Closing += WindowClosing;
         Closed += OnClosed;
         _uiTimer = DispatcherQueue.CreateTimer();
         _uiTimer.Interval = TimeSpan.FromMilliseconds(125);
@@ -54,6 +54,7 @@ public sealed partial class MainWindow : Window
         _playheadTimer = DispatcherQueue.CreateTimer();
         _playheadTimer.Interval = TimeSpan.FromMilliseconds(33);
         _playheadTimer.Tick += (_, _) => UpdatePlayhead();
+        ReplaceSong(new Song(_songTempo, [new SongTrack("Track 1", [])]));
     }
 
     private async void OnLoaded(object sender, RoutedEventArgs args)
@@ -63,7 +64,24 @@ public sealed partial class MainWindow : Window
         OpenAudio();
         OpenMidi();
         _uiTimer.Start();
-        await LoadBankAsync(Path.Combine(AppContext.BaseDirectory, "A320U.sf2"));
+        if (_startupMidiPath is { } path)
+        {
+            SetFileBusy(true);
+            try
+            {
+                await ReadSongAsync(Path.GetFullPath(path));
+            }
+            catch (Exception error)
+            {
+                ShowFileError("Could not open MIDI", error);
+            }
+            finally
+            {
+                SetFileBusy(false);
+            }
+        }
+        if (!_closed)
+            await LoadBankAsync(Path.Combine(AppContext.BaseDirectory, "A320U.sf2"));
     }
 
     private void RefreshDevices()
@@ -282,7 +300,7 @@ public sealed partial class MainWindow : Window
 
     private void RecordClicked(object sender, RoutedEventArgs args)
     {
-        if (_engine is not { } engine || _finishingTake)
+        if (_engine is not { } engine || _finishingTake || _fileBusy)
             return;
 
         if (_recording)
@@ -297,6 +315,7 @@ public sealed partial class MainWindow : Window
             _rows.Clear();
             _capturedNotes.Clear();
             _firstImportedNote = null;
+            _captureTrack = TrackBox.SelectedIndex;
             _noteCount = 0;
             var offset = double.IsFinite(OffsetBox.Value) ? OffsetBox.Value : 10;
             var division = QuantizeBox.SelectedIndex switch { 1 => 4, 2 => 8, 3 => 16, _ => 0 };
@@ -311,8 +330,11 @@ public sealed partial class MainWindow : Window
     private void ShowTakeClicked(object sender, RoutedEventArgs args)
     {
         WorkspaceTabs.SelectedItem = PianoRollTab;
-        if (_firstImportedNote is { } note)
-            RollView.RevealTick(note.StartTick, note.NoteNumber);
+        if (_firstImportedNote is { } take)
+        {
+            TrackBox.SelectedIndex = take.Track;
+            RollView.RevealTick(take.Note.StartTick, take.Note.NoteNumber);
+        }
     }
 
     private void PlayClicked(object sender, RoutedEventArgs args)
@@ -322,7 +344,7 @@ public sealed partial class MainWindow : Window
 
         try
         {
-            if (!engine.PlayNotes(_document.CreatePlaybackSnapshot(), new SoundFontPiano(_bank, engine.SampleRate)))
+            if (!engine.PlaySong(SnapshotSong(), new SoundFontPiano(_bank, engine.SampleRate, generalMidi: true)))
                 return;
 
             _playbackError = null;
@@ -336,7 +358,9 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private void StopClicked(object sender, RoutedEventArgs args)
+    private void StopClicked(object sender, RoutedEventArgs args) => StopSongPlayback();
+
+    private void StopSongPlayback()
     {
         _engine?.StopPlayback();
         UpdatePlayhead();
@@ -410,22 +434,32 @@ public sealed partial class MainWindow : Window
         if (_capturedNotes.Count == 0)
             return;
 
-        long bar = 4L * ticksPerQuarter;
+        long captureBar = 4L * ticksPerQuarter;
+        long songBar = 4L * _songTempo.TicksPerQuarter;
+        var document = _tracks[_captureTrack].Document;
         var first = _capturedNotes.MinBy(note => note.StartTick);
-        long sourceBar = first.StartTick / bar * bar;
-        long rollEnd = _document.Notes
+        long sourceBar = first.StartTick / captureBar * captureBar;
+        long rollEnd = document.Notes
             .Select(note => note.Note.StartTick + note.Note.LengthTicks)
             .DefaultIfEmpty()
             .Max();
-        long targetBar = rollEnd == 0 ? 0 : ((rollEnd - 1) / bar + 1) * bar;
-        _document.Append(_capturedNotes.Select(note => note with
-        {
-            StartTick = note.StartTick - sourceBar + targetBar
-        }));
-        _firstImportedNote = first with { StartTick = first.StartTick - sourceBar + targetBar };
+        long targetBar = rollEnd == 0 ? 0 : ((rollEnd - 1) / songBar + 1) * songBar;
+        document.Append(_capturedNotes.Select(ShiftNote));
+        var imported = ShiftNote(first);
+        _firstImportedNote = (_captureTrack, imported);
         _capturedNotes.Clear();
-        if (WorkspaceTabs.SelectedIndex == 0)
-            RollView.RevealTick(_firstImportedNote.Value.StartTick, first.NoteNumber);
+        if (WorkspaceTabs.SelectedIndex == 0 && TrackBox.SelectedIndex == _captureTrack)
+            RollView.RevealTick(imported.StartTick, imported.NoteNumber);
+
+        SongNote ShiftNote(SongNote note)
+        {
+            double scale = _songTempo.TicksPerQuarter / (double)ticksPerQuarter;
+            return note with
+            {
+                StartTick = targetBar + (long)Math.Round((note.StartTick - sourceBar) * scale, MidpointRounding.AwayFromZero),
+                LengthTicks = Math.Max(1, (long)Math.Round(note.LengthTicks * scale, MidpointRounding.AwayFromZero))
+            };
+        }
     }
 
     private void UpdateControls()
@@ -436,15 +470,16 @@ public sealed partial class MainWindow : Window
         SoundFontButton.IsEnabled = !_loadingBank;
         TestNoteButton.IsEnabled = pianoReady && !_testNoteHeld;
         MetronomeSwitch.IsEnabled = audioReady;
-        RecordButton.IsEnabled = audioReady && !_finishingTake;
+        RecordButton.IsEnabled = audioReady && !_finishingTake && !_fileBusy;
         RecordButton.Content = _recording ? "Stop recording" : "Record test";
-        ShowTakeButton.IsEnabled = _firstImportedNote is not null && !takeInProgress;
+        ShowTakeButton.IsEnabled = _firstImportedNote is not null && !takeInProgress && !_fileBusy;
         AudioDeviceBox.IsEnabled = !takeInProgress;
         PeriodBox.IsEnabled = !takeInProgress;
         MidiDeviceBox.IsEnabled = !takeInProgress;
         RefreshButton.IsEnabled = !takeInProgress;
         OffsetBox.IsEnabled = !takeInProgress;
         QuantizeBox.IsEnabled = !takeInProgress;
+        UpdateFileControls();
         UpdatePlaybackControls();
     }
 
@@ -452,9 +487,10 @@ public sealed partial class MainWindow : Window
     {
         bool audioReady = _output is { SampleRate: >= 16000 and <= 192000 } && !_audioFailed;
         bool takeInProgress = _recording || _finishingTake;
-        PlayButton.IsEnabled = audioReady && _bank is not null && !_playing && !takeInProgress && _document.Notes.Count > 0;
+        PlayButton.IsEnabled = audioReady && _bank is not null && !_playing && !takeInProgress && !_fileBusy
+            && _tracks.Any(track => track.Document.Notes.Count > 0);
         StopButton.IsEnabled = audioReady && _playing;
-        PlaybackStatusText.Text = _playing ? "Playing edited notes" :
+        PlaybackStatusText.Text = _playing ? "Playing song" :
             takeInProgress ? "Recording a take" :
             _playbackError ?? (!audioReady ? "Check the audio output in Recording test" :
                 _loadingBank ? "Loading SoundFont…" :

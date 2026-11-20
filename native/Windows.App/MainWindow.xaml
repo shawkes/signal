@@ -10,9 +10,28 @@
             <Grid Padding="20,16,20,20" RowSpacing="12">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
                     <RowDefinition Height="*" />
                 </Grid.RowDefinitions>
-                <Grid ColumnSpacing="14">
+                <Grid ColumnSpacing="16">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Button x:Name="OpenSongButton" Content="Open MIDI…" Click="OpenSongClicked" />
+                        <Button x:Name="SaveSongButton" Content="Save" Click="SaveSongClicked" />
+                        <Button x:Name="SaveSongAsButton" Content="Save as…" Click="SaveSongAsClicked" />
+                    </StackPanel>
+                    <TextBlock x:Name="SongNameText" Grid.Column="1" VerticalAlignment="Center"
+                               TextTrimming="CharacterEllipsis" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                    <ComboBox x:Name="TrackBox" Grid.Column="2" Header="Track" MinWidth="210" MaxWidth="280"
+                              SelectionChanged="TrackChanged" />
+                </Grid>
+                <InfoBar x:Name="FileErrorBar" Grid.Row="1" Severity="Error" IsOpen="False" />
+                <Grid Grid.Row="2" ColumnSpacing="14">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto" />
                         <ColumnDefinition Width="*" />
@@ -21,11 +40,11 @@
                     <StackPanel Orientation="Horizontal" Spacing="8">
                         <Button x:Name="PlayButton" Click="PlayClicked" IsEnabled="False"
                                 Style="{StaticResource AccentButtonStyle}"
-                                AutomationProperties.Name="Play"
-                                ToolTipService.ToolTip="Play from the beginning">
+                                AutomationProperties.Name="Play song"
+                                ToolTipService.ToolTip="Play all tracks from the beginning">
                             <StackPanel Orientation="Horizontal" Spacing="8">
                                 <SymbolIcon Symbol="Play" />
-                                <TextBlock Text="Play" />
+                                <TextBlock Text="Play song" />
                             </StackPanel>
                         </Button>
                         <Button x:Name="StopButton" Click="StopClicked" IsEnabled="False"
@@ -38,10 +57,10 @@
                     </StackPanel>
                     <TextBlock x:Name="PlaybackStatusText" Grid.Column="1" VerticalAlignment="Center"
                                TextTrimming="CharacterEllipsis" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                    <TextBlock Grid.Column="2" Text="120 BPM  ·  4/4" VerticalAlignment="Center"
+                    <TextBlock x:Name="SongTempoText" Grid.Column="2" VerticalAlignment="Center"
                                Style="{StaticResource BodyStrongTextBlockStyle}" />
                 </Grid>
-                <roll:PianoRollView x:Name="RollView" Grid.Row="1" />
+                <roll:PianoRollView x:Name="RollView" Grid.Row="3" />
             </Grid>
         </TabViewItem>
         <TabViewItem Header="Recording test" IsClosable="False">

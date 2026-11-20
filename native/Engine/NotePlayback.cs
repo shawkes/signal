@@ -1,7 +1,9 @@
 namespace Signal.Native.Engine;
 
+internal readonly record struct PlaybackGrid(long Origin, TempoMap TempoMap);
+
 /// <summary>Plays a prepared snapshot on the audio thread without changing live MIDI state.</summary>
-internal sealed class NotePlayback(TempoMap tempo, int sampleRate)
+internal sealed class NotePlayback(int sampleRate)
 {
     private const long Finished = -1;
     private const int Channels = 16;
@@ -27,11 +29,12 @@ internal sealed class NotePlayback(TempoMap tempo, int sampleRate)
         }
     }
 
-    public bool Start(IEnumerable<SongNote> notes, IMonitorSynth synth)
+    public bool Start(IEnumerable<SongNote> notes, IEnumerable<SongChannelMessage> messages,
+        TempoMap tempo, IMonitorSynth synth, long endTick = 0)
     {
         ArgumentNullException.ThrowIfNull(notes);
         ArgumentNullException.ThrowIfNull(synth);
-        var events = new List<NoteEvent>();
+        var events = new List<PlaybackEvent>();
         foreach (var note in notes)
         {
             if (note.StartTick < 0 || note.LengthTicks < 0 || note.Channel >= Channels ||
@@ -41,9 +44,20 @@ internal sealed class NotePlayback(TempoMap tempo, int sampleRate)
             }
 
             long start = tempo.TickToSample(note.StartTick, sampleRate);
-            long end = tempo.TickToSample(checked(note.StartTick + note.LengthTicks), sampleRate);
-            events.Add(new NoteEvent(start, note.Channel, note.NoteNumber, note.Velocity));
-            events.Add(new NoteEvent(Math.Max(checked(start + 1), end), note.Channel, note.NoteNumber, 0));
+            long endTickOfNote = checked(note.StartTick + note.LengthTicks);
+            long end = tempo.TickToSample(endTickOfNote, sampleRate);
+            events.Add(new PlaybackEvent(start, note.StartTick, (byte)(0x90 | note.Channel),
+                note.NoteNumber, note.Velocity, events.Count));
+            events.Add(new PlaybackEvent(Math.Max(checked(start + 1), end), endTickOfNote, (byte)(0x80 | note.Channel),
+                note.NoteNumber, 0, events.Count));
+        }
+        foreach (var message in messages)
+        {
+            if (message.Tick < 0 || message.Status is < 0xa0 or > 0xef || message.Data1 > 127 || message.Data2 > 127)
+                throw new ArgumentOutOfRangeException(nameof(messages), "Messages require valid non-note MIDI channel data and nonnegative time.");
+
+            long frame = tempo.TickToSample(message.Tick, sampleRate);
+            events.Add(new PlaybackEvent(frame, message.Tick, message.Status, message.Data1, message.Data2, events.Count));
         }
         if (events.Count == 0)
             return false;
@@ -51,19 +65,24 @@ internal sealed class NotePlayback(TempoMap tempo, int sampleRate)
         events.Sort(static (left, right) =>
         {
             int order = left.Frame.CompareTo(right.Frame);
-            // A release must precede a retrigger at the same sample.
-            return order != 0 ? order : left.Velocity.CompareTo(right.Velocity);
+            if (order == 0)
+                order = left.Tick.CompareTo(right.Tick);
+            // Release first, then update channel state before attacking at the same tick.
+            if (order == 0)
+                order = left.Priority.CompareTo(right.Priority);
+            return order != 0 ? order : left.Order.CompareTo(right.Order);
         });
         MergeOverlappingReleases(events);
-        long endWithRelease = checked(events[^1].Frame + sampleRate);
-        Volatile.Write(ref _requested, new PlaybackPlan(synth, events.ToArray(), endWithRelease));
+        long endFrame = Math.Max(events[^1].Frame, tempo.TickToSample(endTick, sampleRate));
+        long endWithRelease = checked(endFrame + sampleRate);
+        Volatile.Write(ref _requested, new PlaybackPlan(synth, tempo, events.ToArray(), endFrame, endWithRelease));
         return true;
     }
 
     public void Stop() => Volatile.Write(ref _requested, null);
 
-    /// <returns>The start frame of the playback metronome grid, when the note sequence is playing.</returns>
-    public long? Render(Span<float> output, long firstFrame)
+    /// <returns>The playback metronome grid when the song is playing.</returns>
+    public PlaybackGrid? Render(Span<float> output, long firstFrame)
     {
         var requested = Volatile.Read(ref _requested);
         if (!ReferenceEquals(requested, _active))
@@ -93,30 +112,33 @@ internal sealed class NotePlayback(TempoMap tempo, int sampleRate)
         long relativeFirst = firstFrame - _startFrame;
         long relativeEnd = Math.Min(relativeFirst + output.Length / 2, active.EndWithRelease);
         long cursor = relativeFirst;
-        long? clickOrigin = _nextEvent < active.Events.Length ? _startFrame : null;
+        PlaybackGrid? grid = _nextEvent < active.Events.Length || relativeFirst < active.EndFrame
+            ? new PlaybackGrid(_startFrame, active.TempoMap)
+            : null;
         long fadeEnd = active.EndWithRelease;
         while (_nextEvent < active.Events.Length && active.Events[_nextEvent].Frame < relativeEnd)
         {
-            var note = active.Events[_nextEvent++];
-            if (note.Frame > cursor)
+            var message = active.Events[_nextEvent++];
+            if (message.Frame > cursor)
             {
-                Mix(active.Synth, output[BufferIndex(cursor)..BufferIndex(note.Frame)], fadeEnd - cursor);
-                cursor = note.Frame;
+                Mix(active.Synth, output[BufferIndex(cursor)..BufferIndex(message.Frame)], fadeEnd - cursor);
+                cursor = message.Frame;
             }
-            byte status = (byte)((note.Velocity == 0 ? 0x80 : 0x90) | note.Channel);
-            active.Synth.ProcessMidi(status, note.Key, note.Velocity);
+            active.Synth.ProcessMidi(message.Status, message.Data1, message.Data2);
         }
         if (cursor < relativeEnd)
             Mix(active.Synth, output[BufferIndex(cursor)..BufferIndex(relativeEnd)], fadeEnd - cursor);
 
-        long tick = _nextEvent == active.Events.Length ? Finished : (long)tempo.SampleToTick(relativeEnd, sampleRate);
+        long tick = _nextEvent == active.Events.Length && relativeEnd >= active.EndFrame
+            ? Finished
+            : (long)active.TempoMap.SampleToTick(relativeEnd, sampleRate);
         Volatile.Write(ref active.Tick, tick);
         if (relativeEnd >= active.EndWithRelease)
         {
             Interlocked.CompareExchange(ref _requested, null, active);
             _active = null;
         }
-        return clickOrigin;
+        return grid;
 
         int BufferIndex(long frame) => (int)((frame - relativeFirst) * 2);
     }
@@ -139,7 +161,7 @@ internal sealed class NotePlayback(TempoMap tempo, int sampleRate)
         }
     }
 
-    private static void MergeOverlappingReleases(List<NoteEvent> events)
+    private static void MergeOverlappingReleases(List<PlaybackEvent> events)
     {
         // A MIDI note-off releases all voices on that pitch and channel in MeltySynth.
         // Keep retriggers, and release only when the last overlapping note ends.
@@ -148,10 +170,10 @@ internal sealed class NotePlayback(TempoMap tempo, int sampleRate)
         for (int index = 0; index < events.Count; index++)
         {
             var note = events[index];
-            int key = note.Channel * Keys + note.Key;
-            if (note.Velocity != 0)
+            int key = (note.Status & 0x0f) * Keys + note.Data1;
+            if (note.Command == 0x90)
                 held[key]++;
-            else if (--held[key] != 0)
+            else if (note.Command == 0x80 && --held[key] != 0)
                 continue;
 
             events[written++] = note;
@@ -159,13 +181,20 @@ internal sealed class NotePlayback(TempoMap tempo, int sampleRate)
         events.RemoveRange(written, events.Count - written);
     }
 
-    private sealed class PlaybackPlan(IMonitorSynth synth, NoteEvent[] events, long endWithRelease)
+    private sealed class PlaybackPlan(
+        IMonitorSynth synth, TempoMap tempoMap, PlaybackEvent[] events, long endFrame, long endWithRelease)
     {
         public IMonitorSynth Synth { get; } = synth;
-        public NoteEvent[] Events { get; } = events;
+        public TempoMap TempoMap { get; } = tempoMap;
+        public PlaybackEvent[] Events { get; } = events;
+        public long EndFrame { get; } = endFrame;
         public long EndWithRelease { get; } = endWithRelease;
         public long Tick;
     }
 
-    private readonly record struct NoteEvent(long Frame, byte Channel, byte Key, byte Velocity);
+    private readonly record struct PlaybackEvent(long Frame, long Tick, byte Status, byte Data1, byte Data2, int Order)
+    {
+        public int Command => Status & 0xf0;
+        public int Priority => Command switch { 0x80 => 0, 0x90 => 2, _ => 1 };
+    }
 }

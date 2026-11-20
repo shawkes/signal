@@ -6,12 +6,20 @@ public readonly record struct PianoRollNote(long Id, SongNote Note);
 public sealed class PianoRollDocument
 {
     private readonly List<PianoRollNote> _notes = [];
-    private readonly Stack<Action> _undo = new();
+    private readonly Stack<(Action Revert, long Revision)> _undo = new();
     private long _nextId = 1;
+    private long _nextRevision;
 
-    public PianoRollDocument() => Notes = _notes.AsReadOnly();
+    public PianoRollDocument() : this([]) { }
+
+    public PianoRollDocument(IEnumerable<SongNote> notes)
+    {
+        Notes = _notes.AsReadOnly();
+        AppendNotes(notes.ToArray(), recordUndo: false);
+    }
 
     public IReadOnlyList<PianoRollNote> Notes { get; }
+    public long Revision { get; private set; }
     public bool CanUndo => _undo.Count > 0;
     public event Action? Changed;
 
@@ -46,10 +54,11 @@ public sealed class PianoRollDocument
 
     public bool Undo()
     {
-        if (!_undo.TryPop(out var revert))
+        if (!_undo.TryPop(out var edit))
             return false;
 
-        revert();
+        edit.Revert();
+        Revision = edit.Revision;
         Changed?.Invoke();
         return true;
     }
@@ -57,7 +66,7 @@ public sealed class PianoRollDocument
     public IReadOnlyList<SongNote> CreatePlaybackSnapshot() =>
         Array.AsReadOnly(_notes.Select(entry => entry.Note).ToArray());
 
-    private long AppendNotes(ReadOnlySpan<SongNote> notes)
+    private long AppendNotes(ReadOnlySpan<SongNote> notes, bool recordUndo = true)
     {
         if (notes.IsEmpty)
             return 0;
@@ -72,7 +81,8 @@ public sealed class PianoRollDocument
         for (int i = 0; i < count; i++)
             _notes.Add(new PianoRollNote(firstId + i, notes[i]));
 
-        Commit(() => _notes.RemoveRange(index, count));
+        if (recordUndo)
+            Commit(() => _notes.RemoveRange(index, count));
         return firstId;
     }
 
@@ -92,13 +102,14 @@ public sealed class PianoRollDocument
 
     private void Commit(Action revert)
     {
-        _undo.Push(revert);
+        _undo.Push((revert, Revision));
+        Revision = ++_nextRevision;
         Changed?.Invoke();
     }
 
     private static void Validate(SongNote note)
     {
-        if (note.StartTick < 0 || note.LengthTicks <= 0 || note.StartTick > long.MaxValue - note.LengthTicks
+        if (note.StartTick < 0 || note.LengthTicks < 0 || note.StartTick > long.MaxValue - note.LengthTicks
             || note.Channel > 15 || note.NoteNumber > 127 || note.Velocity is 0 or > 127)
             throw new ArgumentOutOfRangeException(nameof(note), "A note needs a valid tick range, MIDI channel, pitch, and nonzero velocity.");
     }

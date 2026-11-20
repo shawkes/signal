@@ -65,7 +65,7 @@ public sealed class PianoRollDocumentTests
         document.Changed += () => changes++;
 
         document.Append([]);
-        Assert.Throws<ArgumentOutOfRangeException>(() => document.Append([note, note with { LengthTicks = 0 }]));
+        Assert.Throws<ArgumentOutOfRangeException>(() => document.Append([note, note with { LengthTicks = -1 }]));
         Assert.Throws<ArgumentOutOfRangeException>(() => document.Resize(id, long.MaxValue, 2));
         Assert.False(document.Move(id, note.StartTick, note.NoteNumber));
         Assert.False(document.Delete(id + 1));
@@ -73,5 +73,25 @@ public sealed class PianoRollDocumentTests
         Assert.Equal(note, Assert.Single(document.Notes).Note);
         Assert.True(document.Undo());
         Assert.False(document.CanUndo);
+    }
+
+    [Fact]
+    public void SeededNotesHaveNoUndoHistoryAndUndoRestoresTheSavedRevision()
+    {
+        var original = new SongNote(37, 0, 4, 64, 90);
+        var document = new PianoRollDocument([original]);
+        var note = Assert.Single(document.Notes);
+        Assert.Equal(original, note.Note);
+        Assert.False(document.CanUndo);
+        Assert.Equal(0, document.Revision);
+
+        Assert.True(document.Resize(note.Id, 37, 20));
+        long saved = document.Revision;
+        Assert.True(document.Move(note.Id, 40, 65));
+        long abandonedEdit = document.Revision;
+        Assert.True(document.Undo());
+        Assert.Equal(saved, document.Revision);
+        Assert.True(document.Move(note.Id, 42, 67));
+        Assert.True(document.Revision > abandonedEdit);
     }
 }

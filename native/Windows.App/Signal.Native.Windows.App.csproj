@@ -17,6 +17,7 @@
     <PackageReference Include="Microsoft.WindowsAppSDK" Version="2.6.4" />
     <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.26100.4654" />
     <ProjectReference Include="../Engine/Signal.Native.Engine.csproj" />
+    <ProjectReference Include="../MidiFiles/Signal.Native.MidiFiles.csproj" />
     <ProjectReference Include="../SoundFont/Signal.Native.SoundFont.csproj" />
     <ProjectReference Include="../Windows.Audio/Windows.Audio.csproj" />
     <ProjectReference Include="../Windows.Midi/Signal.Native.Windows.Midi.csproj" />

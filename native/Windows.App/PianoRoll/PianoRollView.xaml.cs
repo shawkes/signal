@@ -10,31 +10,34 @@ using Signal.Native.Engine;
 using Windows.Foundation;
 using Windows.System;
 using Windows.UI.Core;
+using DispatcherQueuePriority = Microsoft.UI.Dispatching.DispatcherQueuePriority;
 
 namespace Signal.Native.Windows.App.PianoRoll;
 
 public sealed partial class PianoRollView : UserControl
 {
-    private const int TicksPerBeat = TempoMap.DefaultTicksPerQuarter;
-    private const int GridTicks = TicksPerBeat / 4;
-    private const int TicksPerBar = TicksPerBeat * 4;
+    private const int BeatsPerBar = 4;
+    private const int SixteenthsPerBeat = 4;
     private const int PitchCount = 128;
     private const double RowHeight = 24;
-    private const double CellWidth = 24;
+    private const double BeatWidth = 96;
     private const double KeyboardWidth = 68;
     private const double TimelineHeight = 30;
-    private const double PixelsPerTick = CellWidth / GridTicks;
     private static readonly string[] PitchNames = ["C", "C♯", "D", "D♯", "E", "F", "F♯", "G", "G♯", "A", "A♯", "B"];
 
     private readonly Dictionary<long, Border> _noteViews = [];
     private readonly Rectangle _rulerCursor = new() { Width = 2, Height = TimelineHeight };
     private PianoRollDocument? _document;
     private Palette _palette = Palette.Dark;
+    private int _ticksPerBeat = TempoMap.DefaultTicksPerQuarter;
+    private int _cellsPerBeat = SixteenthsPerBeat;
+    private byte _defaultChannel;
+    private long _timelineEnd;
     private long? _selected;
     private long? _playhead;
     private long _entryTick;
     private byte _entryPitch = 60;
-    private (long Tick, byte Pitch)? _reveal = (0, 60);
+    private (long Tick, byte Pitch, bool Recenter)? _reveal = (0, 60, true);
     private uint? _pointerId;
     private PianoRollNote? _grabbed;
     private SongNote? _preview;
@@ -42,13 +45,16 @@ public sealed partial class PianoRollView : UserControl
     private bool _resizing;
     private bool _editingEnabled = true;
 
+    private double CellWidth => BeatWidth / _cellsPerBeat;
+    private long TicksPerBar => (long)BeatsPerBar * _ticksPerBeat;
+
     public PianoRollView()
     {
         InitializeComponent();
         Loaded += (_, _) =>
         {
             RefreshViewport();
-            DispatcherQueue.TryEnqueue(ApplyReveal);
+            DispatcherQueue.TryEnqueue(DispatcherQueuePriority.Low, ApplyReveal);
         };
         ActualThemeChanged += (_, _) => ApplyPalette();
         ApplyPalette();
@@ -70,20 +76,55 @@ public sealed partial class PianoRollView : UserControl
         }
     }
 
-    public void Attach(PianoRollDocument document)
+    public void Attach(
+        PianoRollDocument document, int ticksPerQuarter = TempoMap.DefaultTicksPerQuarter, byte defaultChannel = 0)
     {
+        ArgumentNullException.ThrowIfNull(document);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(ticksPerQuarter);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(defaultChannel, (byte)15);
+        if (ReferenceEquals(_document, document) && _ticksPerBeat == ticksPerQuarter && _defaultChannel == defaultChannel)
+            return;
+
+        if (_pointerId is not null)
+        {
+            CancelGesture();
+            Surface.ReleasePointerCaptures();
+        }
         if (_document is not null)
             _document.Changed -= RefreshDocument;
         _document = document;
         document.Changed += RefreshDocument;
+        _ticksPerBeat = ticksPerQuarter;
+        _cellsPerBeat = Math.Min(ticksPerQuarter, SixteenthsPerBeat);
+        _defaultChannel = defaultChannel;
+        GridLabel.Text = _cellsPerBeat == SixteenthsPerBeat ? "4-beat ruler  ·  1/16 edit grid" : "4-beat ruler  ·  1-tick edit grid";
         _selected = null;
+        var firstNote = document.Notes.Count == 0
+            ? new SongNote(0, 0, defaultChannel, 60, 96)
+            : document.Notes.MinBy(item => item.Note.StartTick).Note;
+        _entryTick = firstNote.StartTick;
+        _entryPitch = firstNote.NoteNumber;
         RefreshDocument();
+        QueueReveal(_playhead ?? firstNote.StartTick, firstNote.NoteNumber, recenter: true);
     }
 
-    public void RevealTick(long tick, byte pitch)
+    public void SetTimelineEnd(long tick)
     {
-        _reveal = (tick, pitch);
-        DispatcherQueue.TryEnqueue(ApplyReveal);
+        ArgumentOutOfRangeException.ThrowIfNegative(tick);
+        if (_timelineEnd == tick)
+            return;
+
+        _timelineEnd = tick;
+        UpdateSurfaceExtent();
+        RefreshViewport();
+    }
+
+    public void RevealTick(long tick, byte pitch) => QueueReveal(tick, pitch, recenter: false);
+
+    private void QueueReveal(long tick, byte pitch, bool recenter)
+    {
+        _reveal = (tick, pitch, recenter);
+        DispatcherQueue.TryEnqueue(DispatcherQueuePriority.Low, ApplyReveal);
     }
 
     public void SetPlayhead(long? tick)
@@ -125,20 +166,25 @@ public sealed partial class PianoRollView : UserControl
             _entryPitch = selected.Note.NoteNumber;
         }
 
-        long lastTick = _document?.Notes.Select(item => item.Note.StartTick + item.Note.LengthTicks).DefaultIfEmpty().Max() ?? 0;
-        double bars = Math.Max(4.0, Math.Floor(lastTick / (double)TicksPerBar) + 2);
-        double width = bars * TicksPerBar * PixelsPerTick;
-        if (Surface.Width != width)
-        {
-            Surface.Width = width;
-            Surface.Height = PitchCount * RowHeight;
-            Cursor.Height = Surface.Height;
-            PaintPitchLanes();
-        }
-
+        UpdateSurfaceExtent();
         PaintNotes();
         RefreshSelection();
         RefreshViewport();
+    }
+
+    private void UpdateSurfaceExtent()
+    {
+        long trackEnd = _document?.Notes.Select(item => item.Note.StartTick + item.Note.LengthTicks).DefaultIfEmpty().Max() ?? 0;
+        long lastTick = Math.Max(_timelineEnd, trackEnd);
+        double bars = Math.Max(4.0, Math.Floor(lastTick / (double)TicksPerBar) + 2);
+        double width = bars * BeatsPerBar * BeatWidth;
+        if (Surface.Width == width)
+            return;
+
+        Surface.Width = width;
+        Surface.Height = PitchCount * RowHeight;
+        Cursor.Height = Surface.Height;
+        PaintPitchLanes();
     }
 
     private void PaintPitchLanes()
@@ -171,19 +217,20 @@ public sealed partial class PianoRollView : UserControl
         BeatLayer.Children.Clear();
         double left = EditorScroll.HorizontalOffset;
         double top = EditorScroll.VerticalOffset;
+        int cellsPerBar = _cellsPerBeat * BeatsPerBar;
         long firstCell = (long)Math.Floor(left / CellWidth);
         long lastCell = (long)Math.Ceiling(Math.Min(Surface.Width, left + width) / CellWidth);
         for (long cell = firstCell; cell <= lastCell; cell++)
         {
-            bool bar = cell % 16 == 0;
-            bool beat = cell % 4 == 0;
+            bool bar = cell % cellsPerBar == 0;
+            bool beat = cell % _cellsPerBeat == 0;
             double x = cell * CellWidth;
             var line = bar ? _palette.MajorLine : beat ? _palette.BeatLine : _palette.MinorLine;
             AddRect(BeatLayer, x, 0, 1, Surface.Height, line);
             if (beat)
             {
                 AddRect(Timeline, x - left, bar ? 0 : TimelineHeight - 6, 1, bar ? TimelineHeight : 6, line);
-                string label = bar ? $"{cell / 16 + 1}" : $"{cell / 16 + 1}.{cell % 16 / 4 + 1}";
+                string label = bar ? $"{cell / cellsPerBar + 1}" : $"{cell / cellsPerBar + 1}.{cell % cellsPerBar / _cellsPerBeat + 1}";
                 AddCaption(Timeline, label, x - left + 8, bar ? 5 : 6, bar ? _palette.RulerText : _palette.RulerMuted, bar);
             }
         }
@@ -276,7 +323,7 @@ public sealed partial class PianoRollView : UserControl
         if (active is not null)
         {
             var note = _preview ?? active.Value.Note;
-            string beat = $"{note.StartTick / TicksPerBar + 1}.{note.StartTick % TicksPerBar / TicksPerBeat + 1}";
+            string beat = $"{note.StartTick / TicksPerBar + 1}.{note.StartTick % TicksPerBar / _ticksPerBeat + 1}";
             SelectionText.Text = $"{Caption(note.NoteNumber)} · {beat} · {note.LengthTicks} ticks";
         }
         else
@@ -359,12 +406,12 @@ public sealed partial class PianoRollView : UserControl
         if (_grabbed is not { } item)
             return;
         var note = item.Note;
-        long delta = GridTicks * (long)Math.Round((point.X - _press.X) / CellWidth, MidpointRounding.AwayFromZero);
+        long deltaCells = (long)Math.Round((point.X - _press.X) / CellWidth, MidpointRounding.AwayFromZero);
         var candidate = _resizing
-            ? note with { LengthTicks = ResizeLength(note, delta) }
+            ? note with { LengthTicks = ResizeLength(note, deltaCells) }
             : note with
             {
-                StartTick = MoveStart(note, delta),
+                StartTick = MoveStart(note, deltaCells),
                 NoteNumber = (byte)Math.Clamp(note.NoteNumber - (int)Math.Round((point.Y - _press.Y) / RowHeight), 0, 127)
             };
         if (_preview == candidate)
@@ -387,7 +434,7 @@ public sealed partial class PianoRollView : UserControl
         Surface.ReleasePointerCapture(args.Pointer);
         args.Handled = true;
 
-        if (original is { } item && edited is { } candidate)
+        if (original is { } item && edited is { } candidate && candidate != item.Note)
         {
             if (resize)
                 _document!.Resize(item.Id, candidate.StartTick, candidate.LengthTicks);
@@ -397,7 +444,7 @@ public sealed partial class PianoRollView : UserControl
         else if (original is null && IsWithinSurface(point)
                  && Math.Abs(point.X - _press.X) < 6 && Math.Abs(point.Y - _press.Y) < 6)
         {
-            AddAt(GridTicks * (long)Math.Floor(point.X / CellWidth),
+            AddAt((long)Math.Floor(point.X / CellWidth),
                   (byte)(PitchCount - 1 - (int)(point.Y / RowHeight)));
         }
     }
@@ -440,15 +487,19 @@ public sealed partial class PianoRollView : UserControl
 
     private void Nudge(VirtualKey key, bool resize)
     {
-        long ticks = key switch { VirtualKey.Left => -GridTicks, VirtualKey.Right => GridTicks, _ => 0 };
+        int cells = key switch { VirtualKey.Left => -1, VirtualKey.Right => 1, _ => 0 };
         int semitones = key switch { VirtualKey.Up => 1, VirtualKey.Down => -1, _ => 0 };
         if (SelectedNote() is { } item)
         {
             var note = item.Note;
             if (resize)
-                _document!.Resize(item.Id, note.StartTick, ResizeLength(note, ticks));
+            {
+                long length = ResizeLength(note, cells);
+                if (length != note.LengthTicks)
+                    _document!.Resize(item.Id, note.StartTick, length);
+            }
             else
-                _document!.Move(item.Id, MoveStart(note, ticks), (byte)Math.Clamp(note.NoteNumber + semitones, 0, 127));
+                _document!.Move(item.Id, MoveStart(note, cells), (byte)Math.Clamp(note.NoteNumber + semitones, 0, 127));
 
             if (SelectedNote() is { } moved)
             {
@@ -459,7 +510,7 @@ public sealed partial class PianoRollView : UserControl
         }
         else
         {
-            _entryTick = Math.Max(0, _entryTick + ticks);
+            _entryTick = MoveTick(_entryTick, cells, long.MaxValue);
             _entryPitch = (byte)Math.Clamp(_entryPitch + semitones, 0, 127);
             RevealTick(_entryTick, _entryPitch);
         }
@@ -471,16 +522,24 @@ public sealed partial class PianoRollView : UserControl
 
     private void AddNext()
     {
-        long start = SelectedNote() is { } item
-            ? (item.Note.StartTick / GridTicks + 1) * GridTicks
-            : _entryTick;
-        AddAt(start, _entryPitch);
-        RevealTick(start, _entryPitch);
+        long cell = CellNearestTick(_entryTick);
+        if (SelectedNote() is not null && TickOfCell(cell) <= _entryTick && cell < long.MaxValue)
+            cell++;
+
+        AddAt(cell, _entryPitch);
+        RevealTick(TickOfCell(cell), _entryPitch);
     }
 
-    private void AddAt(long tick, byte pitch)
+    private void AddAt(long cell, byte pitch)
     {
-        var note = new SongNote(tick, GridTicks, 0, pitch, 96);
+        if (cell == long.MaxValue)
+            return;
+        long tick = TickOfCell(cell);
+        long duration = TickOfCell(cell + 1) - tick;
+        if (duration <= 0)
+            return;
+
+        var note = new SongNote(tick, duration, _defaultChannel, pitch, 96);
         long id = _document!.Add(note);
         Select(new PianoRollNote(id, note));
     }
@@ -491,27 +550,33 @@ public sealed partial class PianoRollView : UserControl
             _document!.Delete(id);
     }
 
-    private void EditorViewChanged(object sender, ScrollViewerViewChangedEventArgs args) => RefreshViewport();
+    private void EditorViewChanged(object sender, ScrollViewerViewChangedEventArgs args)
+    {
+        RefreshViewport();
+        if (_reveal is not null)
+            DispatcherQueue.TryEnqueue(DispatcherQueuePriority.Low, ApplyReveal);
+    }
 
     private void EditorSizeChanged(object sender, SizeChangedEventArgs args)
     {
         RefreshViewport();
         if (_reveal is not null)
-            DispatcherQueue.TryEnqueue(ApplyReveal);
+            DispatcherQueue.TryEnqueue(DispatcherQueuePriority.Low, ApplyReveal);
     }
 
     private void ApplyReveal()
     {
-        if (_reveal is not { } target || EditorScroll.ViewportWidth <= 0 || EditorScroll.ViewportHeight <= 0)
+        if (_reveal is not { } target || !IsLoaded || EditorScroll.ViewportWidth <= 0 || EditorScroll.ViewportHeight <= 0
+            || EditorScroll.ExtentWidth < Surface.Width - 1)
             return;
         _reveal = null;
 
         double x = TickX(target.Tick);
         double y = PitchY(target.Pitch);
-        double? left = x < EditorScroll.HorizontalOffset || x >= EditorScroll.HorizontalOffset + EditorScroll.ViewportWidth - CellWidth
+        double? left = target.Recenter || x < EditorScroll.HorizontalOffset || x >= EditorScroll.HorizontalOffset + EditorScroll.ViewportWidth - CellWidth
             ? Math.Clamp(x - CellWidth * 2, 0, EditorScroll.ScrollableWidth)
             : null;
-        double? top = y < EditorScroll.VerticalOffset || y >= EditorScroll.VerticalOffset + EditorScroll.ViewportHeight - RowHeight
+        double? top = target.Recenter || y < EditorScroll.VerticalOffset || y >= EditorScroll.VerticalOffset + EditorScroll.ViewportHeight - RowHeight
             ? Math.Clamp(y - EditorScroll.ViewportHeight / 2, 0, EditorScroll.ScrollableHeight)
             : null;
         if (left is not null || top is not null)
@@ -537,19 +602,40 @@ public sealed partial class PianoRollView : UserControl
     private bool IsWithinSurface(Point point) =>
         point.X >= 0 && point.X < Surface.Width && point.Y >= 0 && point.Y < Surface.Height;
 
-    private static bool NoteContains(SongNote note, Point point)
+    private bool NoteContains(SongNote note, Point point)
     {
         double x = TickX(note.StartTick);
         double y = PitchY(note.NoteNumber);
         return point.X >= x && point.X < x + NoteWidth(note) && point.Y >= y && point.Y < y + RowHeight;
     }
 
-    private static long MoveStart(SongNote note, long delta) =>
-        note.StartTick + Math.Clamp(delta, -note.StartTick, long.MaxValue - note.LengthTicks - note.StartTick);
-    private static long ResizeLength(SongNote note, long delta) => note.LengthTicks + Math.Clamp(
-        delta, Math.Min(note.LengthTicks, GridTicks) - note.LengthTicks, long.MaxValue - note.StartTick - note.LengthTicks);
-    private static double NoteWidth(SongNote note) => Math.Max(9, TickX(note.LengthTicks) - 1);
-    private static double TickX(long tick) => tick * PixelsPerTick;
+    private long MoveStart(SongNote note, long cells) => MoveTick(note.StartTick, cells, long.MaxValue - note.LengthTicks);
+
+    private long MoveTick(long tick, long cells, long maxTick)
+    {
+        long cell = CellNearestTick(tick);
+        long target = cell + Math.Clamp(cells, -cell, long.MaxValue - cell);
+        long delta = TickOfCell(target) - TickOfCell(cell);
+        return tick + Math.Clamp(delta, -tick, maxTick - tick);
+    }
+
+    private long ResizeLength(SongNote note, long cells)
+    {
+        if (cells == 0 || note.StartTick == long.MaxValue)
+            return note.LengthTicks;
+
+        long end = MoveTick(note.StartTick + note.LengthTicks, cells, long.MaxValue);
+        long minimum = Math.Clamp(note.LengthTicks, 1, TickOfCell(1));
+        return Math.Max(minimum, end - note.StartTick);
+    }
+
+    // Convert absolute cell numbers so rounding never accumulates across beats.
+    private long TickOfCell(long cell) => long.CreateSaturating(
+        ((Int128)cell * _ticksPerBeat + _cellsPerBeat / 2) / _cellsPerBeat);
+
+    private long CellNearestTick(long tick) => (long)(((Int128)tick * _cellsPerBeat + _ticksPerBeat / 2) / _ticksPerBeat);
+    private double NoteWidth(SongNote note) => Math.Max(9, TickX(note.LengthTicks) - 1);
+    private double TickX(long tick) => tick * (BeatWidth / _ticksPerBeat);
     private static double PitchY(int pitch) => (PitchCount - 1 - pitch) * RowHeight;
     private static bool IsAccidental(int pitch) => pitch % 12 is 1 or 3 or 6 or 8 or 10;
     private static string Caption(int pitch) => $"{PitchNames[pitch % 12]}{pitch / 12 - 1}";

@@ -74,11 +74,97 @@ public sealed class NotePlaybackTests
     }
 
     [Fact]
+    public void PlaysEveryTrackAcrossTempoChangesWithChannelSetupBeforeTheAttack()
+    {
+        var engine = Create();
+        var synth = new EventSynth();
+        var tempo = new TempoMap(240, [new(0, 500_000), new(240, 1_000_000)]);
+        var song = new Song(tempo,
+        [
+            new SongTrack("Piano", [new(120, 240, 0, 60, 90)], [new(0, 0xc0, 0, 0)]),
+            new SongTrack("Bass", [new(240, 240, 1, 36, 100)],
+                [new(240, 0xb1, 0, 0), new(240, 0xc1, 33, 0), new(360, 0xe1, 0, 64)])
+        ]);
+
+        Assert.True(engine.PlaySong(song, synth));
+        Render(engine, Origin, 72_001);
+
+        Assert.Equal(
+            [
+                new ReceivedMessage(0, 0xc0, 0, 0),
+                new ReceivedMessage(12_000, 0x90, 60, 90),
+                new ReceivedMessage(24_000, 0xb1, 0, 0),
+                new ReceivedMessage(24_000, 0xc1, 33, 0),
+                new ReceivedMessage(24_000, 0x91, 36, 100),
+                new ReceivedMessage(48_000, 0x80, 60, 0),
+                new ReceivedMessage(48_000, 0xe1, 0, 64),
+                new ReceivedMessage(72_000, 0x81, 36, 0)
+            ], synth.Messages);
+        Assert.Equal(TempoMap.DefaultTicksPerQuarter, engine.TempoMap.TicksPerQuarter);
+        Assert.Null(engine.PlaybackTick);
+    }
+
+    [Fact]
+    public void ClickUsesTheSongTempoWhilePlaying()
+    {
+        var engine = Create();
+        engine.MetronomeEnabled = true;
+        var tempo = new TempoMap(960, [new(0, 500_000), new(960, 1_000_000)]);
+        engine.PlaySong(new Song(tempo, [new SongTrack("Track", [new(0, 3_840, 0, 60, 100)])]),
+            SilentMonitorSynth.Instance);
+
+        Assert.Equal(0.25f, Render(engine, Origin, 24_000)[0]);
+        Assert.Equal(0.16f, Render(engine, Origin + 24_000, 24_000)[0]);
+        Assert.Equal(0, Render(engine, Origin + 48_000, 24_000)[0]);
+        Assert.Equal(0.16f, Render(engine, Origin + 72_000, 32)[0]);
+    }
+
+    [Fact]
+    public void DenseTempoClicksStayConsistentAcrossBufferBoundaries()
+    {
+        var tempo = new TempoMap(1, [new(0, 1)]);
+        var song = new Song(tempo, [new SongTrack("Track", [new(0, 100_000, 0, 60, 100)])]);
+        var whole = Create();
+        var split = Create();
+        whole.MetronomeEnabled = split.MetronomeEnabled = true;
+        whole.PlaySong(song, SilentMonitorSynth.Instance);
+        split.PlaySong(song, SilentMonitorSynth.Instance);
+
+        const int firstFrames = 776;
+        const int secondFrames = 1_176;
+        var expected = Render(whole, Origin, firstFrames + secondFrames);
+        var actual = Render(split, Origin, firstFrames).Concat(Render(split, Origin + firstFrames, secondFrames));
+        Assert.Equal(0.25f, expected[0]);
+        Assert.Equal(expected, actual);
+    }
+
+    [Fact]
+    public void PlaybackIncludesAnEmptyTracksTrailingTime()
+    {
+        var engine = Create();
+        var song = new Song(engine.TempoMap,
+        [
+            new SongTrack("Piano", [new(0, 1, 0, 60, 100)]),
+            new SongTrack("Conductor", [], endTick: 40)
+        ]);
+        engine.PlaySong(song, new GateSynth(0.2f));
+
+        var first = Render(engine, Origin, 1_000);
+        Assert.Equal(0.2f, first[0]);
+        Assert.Equal(0, first[^1]);
+        Assert.Equal(20, engine.PlaybackTick);
+        Render(engine, Origin + 1_000, 1_000);
+        Assert.Null(engine.PlaybackTick);
+    }
+
+    [Fact]
     public void PlaybackDoesNotAllocateInTheWarmAudioCallback()
     {
         var engine = Create();
         engine.MetronomeEnabled = true;
-        engine.PlayNotes(Enumerable.Range(0, 480).Select(i => new SongNote(i * 2, 1, 0, 60, 100)), new GateSynth(0.2f));
+        var tempo = new TempoMap(240, [new(0, 500_000), new(240, 1_000_000)]);
+        var notes = Enumerable.Range(0, 480).Select(i => new SongNote(i * 2, 1, 0, 60, 100));
+        engine.PlaySong(new Song(tempo, [new SongTrack("Track", notes)]), new GateSynth(0.2f));
         var output = new float[256];
         for (int i = 0; i < 100; i++)
         {
@@ -135,4 +221,20 @@ public sealed class NotePlaybackTests
 
         public void Render(Span<float> interleavedStereo) => interleavedStereo.Fill(_gate ? amplitude : 0);
     }
+
+    private sealed class EventSynth : IMonitorSynth
+    {
+        private int _frames;
+        public List<ReceivedMessage> Messages { get; } = [];
+
+        public void ProcessMidi(byte status, byte data1, byte data2) => Messages.Add(new(_frames, status, data1, data2));
+
+        public void Render(Span<float> interleavedStereo)
+        {
+            _frames += interleavedStereo.Length / 2;
+            interleavedStereo.Clear();
+        }
+    }
+
+    private readonly record struct ReceivedMessage(int Frame, byte Status, byte Data1, byte Data2);
 }
