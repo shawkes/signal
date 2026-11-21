@@ -22,9 +22,8 @@
     <ProjectReference Include="../SoundFont/Signal.Native.SoundFont.csproj" />
     <ProjectReference Include="../Windows.Audio/Windows.Audio.csproj" />
     <ProjectReference Include="../Windows.Midi/Signal.Native.Windows.Midi.csproj" />
-    <Content Include="../../electron/assets/soundfonts/A320U.sf2" Link="A320U.sf2"
-             CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
-    <Content Include="../../electron/assets/soundfonts/A320U-license.txt" Link="A320U-license.txt"
+    <Content Include="../../LICENSE;../../assets/soundfonts/A320U.sf2;../../assets/soundfonts/A320U-license.txt;../../assets/soundfonts/GPL-2.0.txt"
+             Link="%(Filename)%(Extension)"
              CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

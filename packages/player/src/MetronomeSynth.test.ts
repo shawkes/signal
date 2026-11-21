@@ -46,10 +46,7 @@ it("renders and reuses the bundled click sounds on the shared audio clock", asyn
   expect(createBufferSource).not.toHaveBeenCalled()
 
   const data = readFileSync(
-    new URL(
-      "../../../electron/assets/soundfonts/A320U_drums.sf2",
-      import.meta.url,
-    ),
+    new URL("../../../assets/soundfonts/A320U_drums.sf2", import.meta.url),
   )
   const soundFont = await SoundFont.load(Uint8Array.from(data).buffer)
   synth.loadSoundFont(soundFont)
