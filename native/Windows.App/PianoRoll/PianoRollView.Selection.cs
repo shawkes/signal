@@ -402,7 +402,7 @@ public sealed partial class PianoRollView
 
     private void GridSizeChanged(object sender, SelectionChangedEventArgs args)
     {
-        if (GridSizeBox is null || ScoreDrawing is null || EditorScroll is null)
+        if (GridSizeBox is null || ScoreHost is null || EditorScroll is null)
             return;
         UpdateGrid();
         InvalidateScore();

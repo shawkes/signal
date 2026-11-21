@@ -1,0 +1,35 @@
+<Project Sdk="Uno.Sdk/7.0.22">
+  <PropertyGroup>
+    <TargetFrameworks>net10.0-desktop</TargetFrameworks>
+    <OutputType>Exe</OutputType>
+    <UnoSingleProject>true</UnoSingleProject>
+    <UnoFeatures>Skia</UnoFeatures>
+    <ApplicationTitle>Signal Uno</ApplicationTitle>
+    <ApplicationId>org.signalapp.native.uno</ApplicationId>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <SharedUI>../Windows.App</SharedUI>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="PortAudioSharp2" Version="1.0.6" />
+    <PackageReference Include="RtMidi.Net" Version="2.0.0" />
+    <ProjectReference Include="../Engine/Signal.Native.Engine.csproj" />
+    <ProjectReference Include="../MidiFiles/Signal.Native.MidiFiles.csproj" />
+    <ProjectReference Include="../SoundFont/Signal.Native.SoundFont.csproj" />
+
+    <Compile Include="$(SharedUI)/MainWindow*.cs" Link="%(Filename)%(Extension)" />
+    <Compile Include="$(SharedUI)/MidiMonitor/**/*.cs;$(SharedUI)/Settings/**/*.cs;$(SharedUI)/Tempo/**/*.cs"
+             Link="Shared/%(RecursiveDir)%(Filename)%(Extension)" />
+    <Compile Include="$(SharedUI)/PianoRoll/**/*.cs" Exclude="$(SharedUI)/PianoRoll/PianoRollView.Win2D.cs"
+             Link="PianoRoll/%(RecursiveDir)%(Filename)%(Extension)" />
+    <Page Include="$(SharedUI)/MainWindow.xaml" Link="MainWindow.xaml" />
+    <Page Include="$(SharedUI)/MidiMonitor/MidiMonitorWindow.xaml" Link="MidiMonitor/MidiMonitorWindow.xaml" />
+    <Page Include="$(SharedUI)/Tempo/TempoChangesView.xaml" Link="Tempo/TempoChangesView.xaml" />
+    <Page Include="$(SharedUI)/PianoRoll/PianoRollView.xaml" Link="PianoRoll/PianoRollView.xaml" />
+    <Content Include="../../electron/assets/soundfonts/A320U.sf2" Link="A320U.sf2"
+             CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="../../electron/assets/soundfonts/A320U-license.txt" Link="A320U-license.txt"
+             CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

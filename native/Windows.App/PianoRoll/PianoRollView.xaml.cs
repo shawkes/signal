@@ -72,6 +72,7 @@ public sealed partial class PianoRollView : UserControl
     public PianoRollView()
     {
         InitializeComponent();
+        InitializeScoreDrawing();
         InitializeChannelLanes();
         Cursor.RenderTransform = _cursorOffset;
         _rulerCursor.RenderTransform = _rulerCursorOffset;
@@ -87,8 +88,7 @@ public sealed partial class PianoRollView : UserControl
         Unloaded += (_, _) =>
         {
             CancelViewportRefresh();
-            _noteText?.Dispose();
-            _noteText = null;
+            ReleaseScoreResources();
             CancelGesture();
             CancelRulerGesture();
             CancelTempoGesture();
@@ -299,6 +299,8 @@ public sealed partial class PianoRollView : UserControl
 
         double left = EditorScroll.HorizontalOffset;
         double top = EditorScroll.VerticalOffset;
+        UpdateScoreViewport(left, top, Math.Min(width, Math.Max(0, Surface.Width - left)),
+            Math.Min(height, Math.Max(0, Surface.Height - top)));
         double right = Math.Min(Surface.Width, left + width);
         if (_paintedRuler is not { } rulerPage || left < rulerPage.Left || right > rulerPage.Right ||
             rulerPage.Resolution != _ticksPerBeat || rulerPage.Meter != _meterMap || rulerPage.Colors != _palette)

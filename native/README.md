@@ -4,6 +4,8 @@ The WinUI 3 prototype opens and saves Standard MIDI Files, edits notes one track
 
 ## Build and run
 
+The [separate Uno desktop project](Uno.App/README.md) targets Windows, Linux, and macOS.
+
 Use x64 Windows (build 19041 or newer) and the .NET 10 SDK. Run these commands from the repository root.
 
 ```powershell

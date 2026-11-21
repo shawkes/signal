@@ -1,5 +1,4 @@
 using System.Text.Json;
-using Signal.Native.Windows.Midi;
 
 namespace Signal.Native.Windows.App.Settings;
 
@@ -28,8 +27,8 @@ internal sealed class RecordingPreferences(string directory)
     private const string MidiInputFile = "midi-input.json";
     private const string QuantizationFile = "recording-quantization.json";
 
-    public static RecordingPreferences ForCurrentUser() => new(Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Signal Native"));
+    public static RecordingPreferences ForCurrentUser(string profile) => new(Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), profile));
 
     public double? ReadOffset()
     {

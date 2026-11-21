@@ -1,7 +1,6 @@
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
-using Microsoft.Windows.Storage.Pickers;
 using Signal.Native.Engine;
 using Signal.Native.MidiFiles;
 using Signal.Native.Windows.App.Settings;
@@ -78,7 +77,7 @@ public sealed partial class MainWindow
     {
         string name = SongIsDirty ? $"{SongName} *" : SongName;
         SongNameText.Text = name;
-        Title = $"Signal · {name}";
+        Title = $"{_applicationTitle} · {name}";
     }
 
     private Song SnapshotSong() => _trackEditor.SnapshotSong();
@@ -115,17 +114,11 @@ public sealed partial class MainWindow
             if (!await ConfirmReplaceSongAsync())
                 return;
 
-            var picker = new FileOpenPicker(AppWindow.Id)
+            var path = await DesktopFileDialogs.OpenAsync(this, [".mid", ".midi"], "SignalOpenMidi",
+                _preferences.ReadPickerFolder(PickerFolder.OpenMidi));
+            if (path is not null)
             {
-                SettingsIdentifier = "SignalOpenMidi",
-                SuggestedFolder = _preferences.ReadPickerFolder(PickerFolder.OpenMidi)
-            };
-            picker.FileTypeFilter.Add(".mid");
-            picker.FileTypeFilter.Add(".midi");
-            var file = await picker.PickSingleFileAsync();
-            if (file is not null)
-            {
-                await ReadSongAsync(file.Path);
+                await ReadSongAsync(path);
                 WorkspaceTabs.SelectedItem = PianoRollTab;
             }
         }
@@ -170,20 +163,10 @@ public sealed partial class MainWindow
             string? path = saveAs ? null : _songPath;
             if (path is null)
             {
-                var picker = new FileSavePicker(AppWindow.Id)
-                {
-                    SuggestedFileName = Path.GetFileNameWithoutExtension(SongName),
-                    DefaultFileExtension = ".mid",
-                    SettingsIdentifier = "SignalSaveMidi",
-                    SuggestedFolder = _preferences.ReadPickerFolder(PickerFolder.SaveMidi),
-                    ShowOverwritePrompt = true
-                };
-                picker.FileTypeChoices.Add("MIDI file", [".mid", ".midi"]);
-                var file = await picker.PickSaveFileAsync();
-                if (file is null)
+                path = await DesktopFileDialogs.SaveAsync(this, Path.GetFileNameWithoutExtension(SongName), "MIDI file",
+                    [".mid", ".midi"], "SignalSaveMidi", _preferences.ReadPickerFolder(PickerFolder.SaveMidi));
+                if (path is null)
                     return false;
-
-                path = file.Path;
             }
 
             Song song = SnapshotSong();

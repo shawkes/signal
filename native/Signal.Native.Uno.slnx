@@ -1,0 +1,8 @@
+<Solution>
+  <Project Path="Engine/Signal.Native.Engine.csproj" />
+  <Project Path="Engine.Tests/Signal.Native.Engine.Tests.csproj" />
+  <Project Path="MidiFiles/Signal.Native.MidiFiles.csproj" />
+  <Project Path="MidiFiles.Tests/Signal.Native.MidiFiles.Tests.csproj" />
+  <Project Path="SoundFont/Signal.Native.SoundFont.csproj" />
+  <Project Path="Uno.App/Signal.Native.Uno.App.csproj" />
+</Solution>

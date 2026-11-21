@@ -7,12 +7,9 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
-using Microsoft.Windows.Storage.Pickers;
 using Signal.Native.Engine;
 using Signal.Native.SoundFont;
 using Signal.Native.Windows.App.Settings;
-using Signal.Native.Windows.Audio;
-using Signal.Native.Windows.Midi;
 using Windows.Graphics;
 
 namespace Signal.Native.Windows.App;
@@ -24,11 +21,13 @@ public sealed partial class MainWindow : Window
     private readonly DispatcherQueueTimer _uiTimer;
     private bool _watchingTransportFrames;
     private readonly string? _startupMidiPath;
-    private WasapiOutput? _output;
+    private AudioOutput? _output;
     private RecordedNotePump? _notePump;
     private LatencyEngine? _engine;
-    private WinMmInput? _midiInput;
-    private readonly RecordingPreferences _preferences = RecordingPreferences.ForCurrentUser();
+    private MidiInput? _midiInput;
+    private readonly RecordingPreferences _preferences;
+    private readonly string _applicationTitle;
+    private string? _midiEnumerationError;
     private MidiInputPreference? _preferredMidiInput;
     private double? _savedRecordingOffset;
     private MeltySynth.SoundFont? _bank;
@@ -46,8 +45,10 @@ public sealed partial class MainWindow : Window
     private (EditableSongTrack Track, SongNote Note)? _firstImportedNote;
     private string? _playbackError;
 
-    public MainWindow(string? startupMidiPath = null)
+    public MainWindow(string? startupMidiPath = null, string applicationTitle = "Signal", string settingsProfile = "Signal Native")
     {
+        _applicationTitle = applicationTitle;
+        _preferences = RecordingPreferences.ForCurrentUser(settingsProfile);
         InitializeComponent();
         OffsetBox.NumberFormatter = new global::Windows.Globalization.NumberFormatting.DecimalFormatter { FractionDigits = 1 };
         _savedRecordingOffset = _preferences.ReadOffset();
@@ -120,7 +121,7 @@ public sealed partial class MainWindow : Window
             AudioDeviceBox.Items.Clear();
             AudioDeviceBox.Items.Add(new ComboBoxItem { Content = "System default" });
             AudioDeviceBox.SelectedIndex = 0;
-            foreach (var device in WasapiOutput.EnumerateDevices())
+            foreach (var device in AudioOutput.EnumerateDevices())
             {
                 var item = new ComboBoxItem { Content = device.Name, Tag = device.Id };
                 AudioDeviceBox.Items.Add(item);
@@ -136,7 +137,13 @@ public sealed partial class MainWindow : Window
         {
             try
             {
-                PopulateMidiInputs(WinMmInput.EnumerateDevices());
+                _midiEnumerationError = null;
+                PopulateMidiInputs(MidiInput.EnumerateDevices());
+            }
+            catch (Exception error) when (error is InvalidOperationException or DllNotFoundException or TypeInitializationException)
+            {
+                PopulateMidiInputs([]);
+                _midiEnumerationError = $"MIDI input unavailable. {error.Message}";
             }
             finally
             {
@@ -192,7 +199,7 @@ public sealed partial class MainWindow : Window
         Volatile.Write(ref _engine, null);
         _audioFailed = false;
         ShowAudioCounters(null, null);
-        WasapiOutput? candidate = null;
+        AudioOutput? candidate = null;
         try
         {
             var preference = PeriodBox.SelectedIndex switch
@@ -203,7 +210,7 @@ public sealed partial class MainWindow : Window
             };
             var id = (AudioDeviceBox.SelectedItem as ComboBoxItem)?.Tag as string;
             LatencyEngine? renderer = null;
-            candidate = new WasapiOutput(id, (samples, firstFrame, timestamp) =>
+            candidate = new AudioOutput(id, (samples, firstFrame, timestamp) =>
                 renderer!.Render(samples, firstFrame, new AudioClockAnchor(timestamp, firstFrame), Stopwatch.GetTimestamp()), preference);
             renderer = new LatencyEngine(candidate.SampleRate, SilentMonitorSynth.Instance)
             {
@@ -283,6 +290,11 @@ public sealed partial class MainWindow : Window
         MidiErrorText.Visibility = Visibility.Collapsed;
         if ((MidiDeviceBox.SelectedItem as ComboBoxItem)?.Tag is not MidiInputDevice device)
         {
+            if (_midiEnumerationError is { } error)
+            {
+                MidiErrorText.Text = error;
+                MidiErrorText.Visibility = Visibility.Visible;
+            }
             UpdateMidiMonitorInput();
             UpdateCalibrationControls();
             return;
@@ -290,9 +302,9 @@ public sealed partial class MainWindow : Window
 
         try
         {
-            _midiInput = new WinMmInput(device.Id, ReceiveMidi);
+            _midiInput = new MidiInput(device.Id, ReceiveMidi);
         }
-        catch (Win32Exception error)
+        catch (Exception error) when (error is Win32Exception or InvalidOperationException or DllNotFoundException or TypeInitializationException)
         {
             MidiErrorText.Text = error.Message;
             MidiErrorText.Visibility = Visibility.Visible;
@@ -318,11 +330,9 @@ public sealed partial class MainWindow : Window
     {
         try
         {
-            var picker = new FileOpenPicker(AppWindow.Id);
-            picker.FileTypeFilter.Add(".sf2");
-            var file = await picker.PickSingleFileAsync();
-            if (file is not null && !_closed)
-                await LoadBankAsync(file.Path);
+            var path = await DesktopFileDialogs.OpenAsync(this, [".sf2"], "SignalSoundFont");
+            if (path is not null && !_closed)
+                await LoadBankAsync(path);
         }
         catch (Exception error)
         {

@@ -1,6 +1,5 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
-using Microsoft.Windows.Storage.Pickers;
 using Signal.Native.SoundFont;
 using Signal.Native.Windows.App.Settings;
 
@@ -47,17 +46,9 @@ public sealed partial class MainWindow
             int sampleRate = sampleRates[rate.SelectedIndex];
             float qualityValue = qualities[quality.SelectedIndex];
 
-            var picker = new FileSavePicker(AppWindow.Id)
-            {
-                SuggestedFileName = Path.GetFileNameWithoutExtension(SongName),
-                DefaultFileExtension = ".ogg",
-                SettingsIdentifier = "SignalAudioExport",
-                SuggestedFolder = _preferences.ReadPickerFolder(PickerFolder.ExportAudio),
-                ShowOverwritePrompt = true
-            };
-            picker.FileTypeChoices.Add("Ogg Vorbis audio", [".ogg"]);
-            var file = await picker.PickSaveFileAsync();
-            if (file is null)
+            var path = await DesktopFileDialogs.SaveAsync(this, Path.GetFileNameWithoutExtension(SongName),
+                "Ogg Vorbis audio", [".ogg"], "SignalAudioExport", _preferences.ReadPickerFolder(PickerFolder.ExportAudio));
+            if (path is null)
                 return;
 
             var song = _trackEditor.SnapshotBackingSong(_songEndTick);
@@ -81,8 +72,8 @@ public sealed partial class MainWindow
             var open = dialog.ShowAsync();
             try
             {
-                await Task.Run(() => OggSongExporter.Export(file.Path, song, bank, cancellation.Token, sampleRate, qualityValue));
-                _preferences.RememberPickerFolder(PickerFolder.ExportAudio, file.Path);
+                await Task.Run(() => OggSongExporter.Export(path, song, bank, cancellation.Token, sampleRate, qualityValue));
+                _preferences.RememberPickerFolder(PickerFolder.ExportAudio, path);
             }
             finally
             {
