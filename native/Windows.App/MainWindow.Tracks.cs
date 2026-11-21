@@ -27,7 +27,7 @@ public sealed partial class MainWindow
 
         var rows = tracks.Select((track, index) => new TrackRow(
             string.IsNullOrWhiteSpace(track.Name) ? $"Track {index + 1}" : track.Name,
-            ChannelLabel(track))).ToArray();
+            ChannelLabel(track) + (track.IsMuted ? " · Muted" : "") + (track.IsSoloed ? " · Solo" : ""))).ToArray();
         _changingTrackList = true;
         try
         {
@@ -95,6 +95,8 @@ public sealed partial class MainWindow
             return;
 
         TrackChannelText.Text = ChannelLabel(track);
+        MuteTrackButton.IsChecked = track.IsMuted;
+        SoloTrackButton.IsChecked = track.IsSoloed;
         TrackSoundBox.Header = track.IsDrum ? "Drum kit" : "Instrument";
         TrackSoundBox.PlaceholderText = _bank is null ? "Load a SoundFont" :
             track.IsDrum ? "No drum kits in this SoundFont" : "No instruments in this SoundFont";
@@ -207,6 +209,20 @@ public sealed partial class MainWindow
         RenameTrackButton.IsEnabled = canChange && _selectedTrack is not null;
         RemoveTrackButton.IsEnabled = canChange && _selectedTrack is not null && _trackEditor.Tracks.Count > 1;
         TrackSoundBox.IsEnabled = canChange && !_loadingBank && _soundChoices.Length > 0;
+        MuteTrackButton.IsEnabled = CanSeek && _selectedTrack is not null;
+        SoloTrackButton.IsEnabled = MuteTrackButton.IsEnabled;
+    }
+
+    private void TrackMixClicked(object sender, RoutedEventArgs args)
+    {
+        if (!CanSeek || _selectedTrack is not { } track)
+            return;
+
+        track.IsMuted = MuteTrackButton.IsChecked == true;
+        track.IsSoloed = SoloTrackButton.IsChecked == true;
+        RefreshTrackPanel(track);
+        if (_engine is { PlaybackTick: long tick } engine && _bank is not null)
+            StartSongPlayback(engine, tick, seek: true, refreshMix: true);
     }
 
     private static string ChannelLabel(EditableSongTrack track) =>

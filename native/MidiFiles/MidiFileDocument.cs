@@ -44,7 +44,12 @@ public sealed class MidiFileDocument
             throw new InvalidDataException($"Could not read the MIDI file. {error.Message}", error);
         }
 
-        if (file.OriginalFormat == MidiFileFormat.MultiSequence)
+        return ReadFile(file, file.OriginalFormat);
+    }
+
+    private static MidiFileDocument ReadFile(MidiFile file, MidiFileFormat format)
+    {
+        if (format == MidiFileFormat.MultiSequence)
             throw new NotSupportedException("MIDI format 2 contains independent sequences. Open a format 0 or 1 file.");
         if (file.TimeDivision is not TicksPerQuarterNoteTimeDivision { TicksPerQuarterNote: > 0 } division)
             throw new NotSupportedException("This editor requires PPQ timing. Convert SMPTE-timed MIDI to PPQ first.");
@@ -52,7 +57,7 @@ public sealed class MidiFileDocument
         var tempoTicks = new HashSet<long>();
         var rawSignatures = new List<(long Tick, TimeSignatureEvent Event)>();
         var tracks = file.GetTrackChunks().Select(chunk => ReadTrack(chunk, tempoTicks, rawSignatures)).ToArray();
-        if (tracks.Length == 0 || (file.OriginalFormat == MidiFileFormat.SingleTrack && tracks.Length != 1))
+        if (tracks.Length == 0 || (format == MidiFileFormat.SingleTrack && tracks.Length != 1))
             throw new InvalidDataException("The MIDI file does not contain the expected number of tracks.");
 
         var midiTempoMap = file.GetTempoMap();
@@ -81,6 +86,12 @@ public sealed class MidiFileDocument
 
     /// <summary>Saves tracks in song order. A null source entry identifies a newly created track.</summary>
     public void Write(string path, Song song, IReadOnlyList<int?> sourceTrackIndices)
+    {
+        var file = BuildEditedFile(song, sourceTrackIndices);
+        WriteAtomically(path, file, song.Tracks.Count == 1 ? MidiFileFormat.SingleTrack : MidiFileFormat.MultiTrack);
+    }
+
+    private MidiFile BuildEditedFile(Song song, IReadOnlyList<int?> sourceTrackIndices)
     {
         ArgumentNullException.ThrowIfNull(song);
         ArgumentNullException.ThrowIfNull(sourceTrackIndices);
@@ -134,11 +145,66 @@ public sealed class MidiFileDocument
                 chunks.Add(outputTracks[nextTrack++]);
         }
         chunks.AddRange(outputTracks.Skip(nextTrack));
-        var file = new MidiFile(chunks) { TimeDivision = _source.TimeDivision };
-        // DryWetMIDI splits one chunk into multiple tracks when asked to write format 1.
-        // Format 0 keeps a song with one surviving track as a single track.
-        var format = outputTracks.Length == 1 ? MidiFileFormat.SingleTrack : MidiFileFormat.MultiTrack;
-        WriteAtomically(path, file, format);
+        return new MidiFile(chunks) { TimeDivision = _source.TimeDivision };
+    }
+
+    public MidiFileDocument Crop(Song song, IReadOnlyList<int?> sourceTrackIndices, long start, long end)
+    {
+        var cropped = SongCrop.Keep(song, start, end);
+        var edited = BuildEditedFile(song, sourceTrackIndices);
+        var chunks = new List<MidiChunk>();
+        var timing = new List<FileEvent>();
+        AddTempos(timing, cropped.TempoMap.Changes);
+        int trackIndex = 0;
+        long openingKeyTick = -1;
+        KeySignatureEvent? openingKey = null;
+        var metadata = new List<List<FileEvent>>();
+        foreach (var chunk in edited.GetTrackChunks())
+        {
+            var events = new List<FileEvent>();
+            metadata.Add(events);
+            long tick = 0;
+            foreach (var midiEvent in chunk.Events)
+            {
+                tick = checked(tick + midiEvent.DeltaTime);
+                if (tick >= end)
+                    break;
+                if (midiEvent is ChannelEvent or EndOfTrackEvent or SetTempoEvent or TimeSignatureEvent or SequenceTrackNameEvent)
+                    continue;
+                if (tick < start && midiEvent is KeySignatureEvent key && tick >= openingKeyTick)
+                {
+                    openingKeyTick = tick;
+                    openingKey = key;
+                }
+                if (tick >= start || midiEvent is SysExEvent or CopyrightNoticeEvent or InstrumentNameEvent)
+                    events.Add(new FileEvent(Math.Max(0, tick - start), midiEvent.Clone()));
+            }
+        }
+        if (openingKey is not null)
+            timing.Add(new FileEvent(0, openingKey.Clone()));
+        foreach (var change in cropped.MeterMap.Changes)
+        {
+            long originalTick = change.Tick + start;
+            long signatureTick = change.Tick == 0
+                ? song.MeterMap.Changes.Last(meter => meter.Tick <= start).Tick
+                : originalTick;
+            var original = _signatures[signatureTick].LastOrDefault(item =>
+                item.Numerator == change.Meter.Numerator && item.Denominator == change.Meter.Denominator);
+            timing.Add(new FileEvent(change.Tick, original?.Clone() ?? CreateSignature(change.Meter)));
+        }
+        metadata[0].InsertRange(0, timing);
+        foreach (var chunk in edited.Chunks)
+        {
+            if (chunk is TrackChunk)
+            {
+                chunks.Add(CreateTrack(cropped.Tracks[trackIndex], metadata[trackIndex]));
+                trackIndex++;
+            }
+            else
+                chunks.Add(chunk);
+        }
+        var format = trackIndex == 1 ? MidiFileFormat.SingleTrack : MidiFileFormat.MultiTrack;
+        return ReadFile(new MidiFile(chunks) { TimeDivision = edited.TimeDivision }, format);
     }
 
     public static void WriteNew(string path, Song song)

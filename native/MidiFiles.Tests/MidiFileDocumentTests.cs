@@ -12,6 +12,40 @@ public sealed class MidiFileDocumentTests : IDisposable
     private readonly string _directory = Directory.CreateTempSubdirectory("signal-midi-").FullName;
 
     [Fact]
+    public void CropRoundTripKeepsSetupAndInRangeMetadataAndShortensTheFile()
+    {
+        string input = InDirectory("full.mid");
+        string output = InDirectory("cropped.mid");
+        var track = new TrackChunk(
+            new SequenceTrackNameEvent("Bass"),
+            new SetTempoEvent(600_000),
+            new TimeSignatureEvent(3, 4),
+            new ProgramChangeEvent((SevenBitNumber)33),
+            new MarkerEvent("Remove") { DeltaTime = 120 },
+            NoteOn(36, 90, 0, 540),
+            new MarkerEvent("Keep") { DeltaTime = 300 },
+            new SetTempoEvent(450_000) { DeltaTime = 240 },
+            NoteOff(36, 0, 0, 720),
+            NoteOn(40, 90, 0, 480),
+            NoteOff(40, 0, 0, 120));
+        WriteFixture(input, MidiFileFormat.SingleTrack, new TicksPerQuarterNoteTimeDivision(240), track);
+
+        var source = MidiFileDocument.Read(input);
+        var cropped = source.Crop(source.Song, [0], 720, 1_440);
+        cropped.Write(output, cropped.Song);
+        var reopened = MidiFileDocument.Read(output).Song;
+
+        var bass = Assert.Single(reopened.Tracks);
+        Assert.Equal("Bass", bass.Name);
+        Assert.Equal(720, bass.EndTick);
+        Assert.Equal(new SongNote(0, 720, 0, 36, 90), Assert.Single(bass.Notes));
+        Assert.Equal(new SongChannelMessage(0, 0xc0, 33, 0), Assert.Single(bass.PlaybackMessages));
+        Assert.Equal(new SongMeter(3, 4), reopened.OpeningMeter);
+        Assert.Equal(new[] { new TempoChange(0, 600_000), new TempoChange(480, 450_000) }, reopened.TempoMap.Changes);
+        Assert.Equal("Keep", Assert.Single(ReadRaw(output).GetTrackChunks().Single().Events.OfType<MarkerEvent>()).Text);
+    }
+
+    [Fact]
     public void Format1EditsPreserveTrackBoundariesAndOriginalTimedEvents()
     {
         string input = InDirectory("original.mid");

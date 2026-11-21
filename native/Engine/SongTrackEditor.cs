@@ -23,6 +23,8 @@ public sealed class EditableSongTrack
     public int? SourceIndex { get; }
     public byte PrimaryChannel { get; }
     public bool IsDrum => PrimaryChannel == SongTrackEditor.DrumChannel;
+    public bool IsMuted { get; set; }
+    public bool IsSoloed { get; set; }
     public long EndTick { get; }
     public IReadOnlyList<SongChannelMessage> PlaybackMessages { get; internal set; }
     internal long SavedNoteRevision { get; set; }
@@ -46,8 +48,9 @@ public sealed class SongTrackEditor
     private long _tempoRevision;
     private long _nextTempoRevision;
     private long _savedTempoRevision;
+    private bool _unsavedCrop;
 
-    public SongTrackEditor(Song song, bool imported = false)
+    public SongTrackEditor(Song song, bool imported = false, IReadOnlyList<EditableSongTrack>? previousTracks = null)
     {
         ArgumentNullException.ThrowIfNull(song);
         if (song.Tracks.Count == 0)
@@ -57,7 +60,14 @@ public sealed class SongTrackEditor
         MeterMap = _savedMeterMap = song.MeterMap;
         Tracks = _tracks.AsReadOnly();
         for (int index = 0; index < song.Tracks.Count; index++)
-            Insert(index, new EditableSongTrack(song.Tracks[index], imported ? index : null));
+        {
+            var previous = previousTracks?[index];
+            Insert(index, new EditableSongTrack(song.Tracks[index], imported ? index : null, previous?.PrimaryChannel)
+            {
+                IsMuted = previous?.IsMuted ?? false,
+                IsSoloed = previous?.IsSoloed ?? false
+            });
+        }
     }
 
     public TempoMap TempoMap { get; private set; }
@@ -68,7 +78,7 @@ public sealed class SongTrackEditor
     public bool CanUndoTempoEdit => _tempoUndo.Count != 0;
     public bool CanUndoMeterEdit => _meterUndo.Count != 0;
     public bool HasInstrumentChannel => FindInstrumentChannel() is not null;
-    public bool IsDirty => _revision != _savedRevision
+    public bool IsDirty => _unsavedCrop || _revision != _savedRevision
         || _tempoRevision != _savedTempoRevision
         || !ReferenceEquals(MeterMap, _savedMeterMap)
         || _tracks.Any(track => track.Document.Revision != track.SavedNoteRevision);
@@ -83,6 +93,7 @@ public sealed class SongTrackEditor
 
     public void MarkSaved()
     {
+        _unsavedCrop = false;
         _savedRevision = _revision;
         _savedTempoRevision = _tempoRevision;
         _savedMeterMap = MeterMap;
@@ -90,6 +101,17 @@ public sealed class SongTrackEditor
             track.SavedNoteRevision = track.Document.Revision;
 
         Changed?.Invoke();
+    }
+
+    public void MarkCropUnsaved() => _unsavedCrop = true;
+
+    public Song SnapshotBackingSong(long endTick)
+    {
+        bool solo = _tracks.Any(track => track.IsSoloed);
+        bool IsAudible(EditableSongTrack track) => !track.IsMuted && (!solo || track.IsSoloed);
+        return new Song(TempoMap, _tracks.Select(track => IsAudible(track)
+            ? new SongTrack(track.Name, track.Document.CreatePlaybackSnapshot(), track.PlaybackMessages, endTick)
+            : new SongTrack(track.Name, [], endTick: endTick)), meterMap: MeterMap);
     }
 
     /// <summary>Replaces the tempo points as one edit, retaining the song's tick resolution.</summary>

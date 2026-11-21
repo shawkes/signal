@@ -32,6 +32,10 @@
                         </MenuFlyoutItem.KeyboardAccelerators>
                     </MenuFlyoutItem>
                 </MenuBarItem>
+                <MenuBarItem Title="Song">
+                    <MenuFlyoutItem x:Name="CropSongMenuItem" Text="Crop song…" Click="CropSongClicked" />
+                    <MenuFlyoutItem x:Name="UndoCropMenuItem" Text="Undo crop…" Click="UndoCropClicked" />
+                </MenuBarItem>
                 <MenuBarItem Title="View" AccessKey="V">
                     <MenuFlyoutItem Text="MIDI monitor…" Click="OpenMidiMonitorClicked" />
                 </MenuBarItem>
@@ -166,6 +170,10 @@
                             </ListView>
                             <StackPanel Grid.Row="3" Spacing="8">
                                 <TextBlock x:Name="TrackChannelText" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                    <ToggleButton x:Name="MuteTrackButton" Content="Mute" Click="TrackMixClicked" />
+                                    <ToggleButton x:Name="SoloTrackButton" Content="Solo" Click="TrackMixClicked" />
+                                </StackPanel>
                                 <ComboBox x:Name="TrackSoundBox" Header="Sound" HorizontalAlignment="Stretch"
                                           SelectionChanged="TrackSoundChanged" />
                                 <ComboBox x:Name="MidiRoutingBox" Header="MIDI input routing" SelectedIndex="0"

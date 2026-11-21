@@ -23,7 +23,13 @@ public sealed partial class MainWindow
 
     private void ReplaceSong(Song song, MidiFileDocument? source = null, string? path = null)
     {
-        var editor = new SongTrackEditor(song, imported: source is not null);
+        _cropUndo.Clear();
+        InstallSongEditor(new SongTrackEditor(song, imported: source is not null), source, path);
+    }
+
+    private void InstallSongEditor(SongTrackEditor editor, MidiFileDocument? source, string? path,
+        EditableSongTrack? selected = null)
+    {
         _cueTick = 0;
         StopSongPlayback();
         if (_trackEditor is not null)
@@ -42,7 +48,7 @@ public sealed partial class MainWindow
         _loopRange = null;
         _loopEnabled = false;
 
-        RefreshTrackPanel(editor.Tracks.FirstOrDefault(track => track.Document.Notes.Count > 0) ?? editor.Tracks[0]);
+        RefreshTrackPanel(selected ?? editor.Tracks.FirstOrDefault(track => track.Document.Notes.Count > 0) ?? editor.Tracks[0]);
         SongEdited();
     }
 
@@ -180,6 +186,7 @@ public sealed partial class MainWindow
                     source.Write(path, song, sourceTrackIndices);
             });
             _songPath = path;
+            _songSaveCount++;
             _trackEditor.MarkSaved();
             return true;
         }
@@ -268,6 +275,8 @@ public sealed partial class MainWindow
         SaveSongAsButton.IsEnabled = ready;
         TempoChangesButton.IsEnabled = ready;
         MeterButton.IsEnabled = ready;
+        CropSongMenuItem.IsEnabled = ready && LastSongMeasure > 1;
+        UndoCropMenuItem.IsEnabled = ready && _cropUndo.Count > 0;
         RollView.SetTempoEditingEnabled(ready);
     }
 

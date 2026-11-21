@@ -413,15 +413,17 @@ public sealed partial class MainWindow : Window
         StartSongPlayback(engine, _pausedTick ?? _cueTick);
     }
 
-    private void StartSongPlayback(LatencyEngine engine, long tick, bool seek = false)
+    private void StartSongPlayback(LatencyEngine engine, long tick, bool seek = false, bool refreshMix = false)
     {
         try
         {
-            var song = seek && _playingSong is not null ? _playingSong : SnapshotSong();
-            long endTick = seek ? _playingSongEndTick : _songEndTick;
+            bool reuse = seek && !refreshMix && _playingSong is not null;
+            long endTick = reuse ? _playingSongEndTick : _songEndTick;
+            var song = reuse ? _playingSong! : _trackEditor.SnapshotBackingSong(endTick);
             var loop = EnabledLoopRange(_loopRange, _loopEnabled, endTick);
             long start = seek ? Math.Min(tick, Math.Max(0, endTick - 1)) : tick < endTick ? tick : 0;
-            if (!engine.PlaySong(song, new SoundFontPiano(_bank!, engine.SampleRate, generalMidi: true), loop, start))
+            if (!engine.PlaySong(song, new SoundFontPiano(_bank!, engine.SampleRate, generalMidi: true), loop, start,
+                allowSilent: true))
                 return;
 
             _pausedTick = null;

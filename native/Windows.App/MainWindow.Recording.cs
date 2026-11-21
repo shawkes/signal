@@ -60,7 +60,7 @@ public sealed partial class MainWindow
             ConfigureLiveMidi(engine);
             var overdub = loop.HasValue ? new SoundFontPiano(bank, engine.SampleRate, generalMidi: true) : null;
             var backing = new SoundFontPiano(bank, engine.SampleRate, generalMidi: true);
-            var song = SnapshotSong();
+            var song = _trackEditor.SnapshotBackingSong(_songEndTick);
             long takeId = engine.RecordSong(song, backing,
                 CountInBox.IsChecked == true, RecordingOffset, RecordingGrid,
                 loop: loop, overdubSynth: overdub, overdubSetup: _liveSetup);
