@@ -7,43 +7,56 @@
     xmlns:roll="using:Signal.Native.Windows.App.PianoRoll">
     <TabView x:Name="WorkspaceTabs" Padding="0,8,0,0" TabWidthMode="SizeToContent"
              IsAddTabButtonVisible="False" CanReorderTabs="False" SelectedIndex="0"
-             PreviewKeyDown="TransportKeyDown">
+             PreviewKeyDown="TransportKeyDown" PreviewKeyUp="TransportKeyUp">
         <TabView.TabStripHeader>
-            <MenuBar VerticalAlignment="Center">
-                <MenuBarItem Title="File" winappsdk:AccessKey="F">
-                    <MenuFlyoutItem x:Name="NewSongMenuItem" Text="New" Click="NewSongClicked" winappsdk:AccessKey="N">
-                        <MenuFlyoutItem.KeyboardAccelerators>
-                            <KeyboardAccelerator Key="N" Modifiers="Control" />
-                        </MenuFlyoutItem.KeyboardAccelerators>
-                    </MenuFlyoutItem>
-                    <MenuFlyoutItem x:Name="OpenSongButton" Text="Open MIDI…" Click="OpenSongClicked" winappsdk:AccessKey="O">
-                        <MenuFlyoutItem.KeyboardAccelerators>
-                            <KeyboardAccelerator Key="O" Modifiers="Control" />
-                        </MenuFlyoutItem.KeyboardAccelerators>
-                    </MenuFlyoutItem>
-                    <MenuFlyoutSeparator />
-                    <MenuFlyoutItem x:Name="SaveSongButton" Text="Save" Click="SaveSongClicked" winappsdk:AccessKey="S">
-                        <MenuFlyoutItem.KeyboardAccelerators>
-                            <KeyboardAccelerator Key="S" Modifiers="Control" />
-                        </MenuFlyoutItem.KeyboardAccelerators>
-                    </MenuFlyoutItem>
-                    <MenuFlyoutItem x:Name="SaveSongAsButton" Text="Save as…" Click="SaveSongAsClicked" winappsdk:AccessKey="A">
-                        <MenuFlyoutItem.KeyboardAccelerators>
-                            <KeyboardAccelerator Key="S" Modifiers="Control,Shift" />
-                        </MenuFlyoutItem.KeyboardAccelerators>
-                    </MenuFlyoutItem>
-                    <MenuFlyoutSubItem Text="Export">
-                        <MenuFlyoutItem x:Name="ExportOggMenuItem" Text="Ogg…" Click="ExportOggClicked" />
-                    </MenuFlyoutSubItem>
-                </MenuBarItem>
-                <MenuBarItem Title="Song">
-                    <MenuFlyoutItem x:Name="CropSongMenuItem" Text="Crop song…" Click="CropSongClicked" />
-                    <MenuFlyoutItem x:Name="UndoCropMenuItem" Text="Undo crop…" Click="UndoCropClicked" />
-                </MenuBarItem>
-                <MenuBarItem Title="View" winappsdk:AccessKey="V">
-                    <MenuFlyoutItem Text="MIDI monitor…" Click="OpenMidiMonitorClicked" />
-                </MenuBarItem>
-            </MenuBar>
+            <StackPanel x:Name="MainMenu" Orientation="Horizontal" VerticalAlignment="Center"
+                        PreviewKeyDown="TransportMenuKeyDown" PreviewKeyUp="TransportKeyUp">
+                <Button Content="File" Style="{StaticResource SubtleButtonStyle}" winappsdk:AccessKey="F">
+                    <Button.Flyout>
+                        <MenuFlyout Placement="BottomEdgeAlignedLeft">
+                            <MenuFlyoutItem x:Name="NewSongMenuItem" Text="New" Click="NewSongClicked" winappsdk:AccessKey="N">
+                                <MenuFlyoutItem.KeyboardAccelerators>
+                                    <KeyboardAccelerator Key="N" Modifiers="Control" />
+                                </MenuFlyoutItem.KeyboardAccelerators>
+                            </MenuFlyoutItem>
+                            <MenuFlyoutItem x:Name="OpenSongButton" Text="Open MIDI…" Click="OpenSongClicked" winappsdk:AccessKey="O">
+                                <MenuFlyoutItem.KeyboardAccelerators>
+                                    <KeyboardAccelerator Key="O" Modifiers="Control" />
+                                </MenuFlyoutItem.KeyboardAccelerators>
+                            </MenuFlyoutItem>
+                            <MenuFlyoutSeparator />
+                            <MenuFlyoutItem x:Name="SaveSongButton" Text="Save" Click="SaveSongClicked" winappsdk:AccessKey="S">
+                                <MenuFlyoutItem.KeyboardAccelerators>
+                                    <KeyboardAccelerator Key="S" Modifiers="Control" />
+                                </MenuFlyoutItem.KeyboardAccelerators>
+                            </MenuFlyoutItem>
+                            <MenuFlyoutItem x:Name="SaveSongAsButton" Text="Save as…" Click="SaveSongAsClicked" winappsdk:AccessKey="A">
+                                <MenuFlyoutItem.KeyboardAccelerators>
+                                    <KeyboardAccelerator Key="S" Modifiers="Control,Shift" />
+                                </MenuFlyoutItem.KeyboardAccelerators>
+                            </MenuFlyoutItem>
+                            <MenuFlyoutSubItem Text="Export">
+                                <MenuFlyoutItem x:Name="ExportOggMenuItem" Text="Ogg…" Click="ExportOggClicked" />
+                            </MenuFlyoutSubItem>
+                        </MenuFlyout>
+                    </Button.Flyout>
+                </Button>
+                <Button Content="Song" Style="{StaticResource SubtleButtonStyle}">
+                    <Button.Flyout>
+                        <MenuFlyout Placement="BottomEdgeAlignedLeft">
+                            <MenuFlyoutItem x:Name="CropSongMenuItem" Text="Crop song…" Click="CropSongClicked" />
+                            <MenuFlyoutItem x:Name="UndoCropMenuItem" Text="Undo crop…" Click="UndoCropClicked" />
+                        </MenuFlyout>
+                    </Button.Flyout>
+                </Button>
+                <Button Content="View" Style="{StaticResource SubtleButtonStyle}" winappsdk:AccessKey="V">
+                    <Button.Flyout>
+                        <MenuFlyout Placement="BottomEdgeAlignedLeft">
+                            <MenuFlyoutItem Text="MIDI monitor…" Click="OpenMidiMonitorClicked" />
+                        </MenuFlyout>
+                    </Button.Flyout>
+                </Button>
+            </StackPanel>
         </TabView.TabStripHeader>
         <TabViewItem x:Name="PianoRollTab" Header="Piano roll" IsClosable="False">
             <Grid Padding="20,16,20,20" RowSpacing="12">
@@ -112,7 +125,7 @@
                         <StackPanel VerticalAlignment="Center" Spacing="2">
                             <TextBlock x:Name="LoopRangeText" TextTrimming="CharacterEllipsis"
                                        Style="{StaticResource CaptionTextBlockStyle}" />
-                            <TextBlock x:Name="PlaybackStatusText" TextTrimming="CharacterEllipsis"
+                            <TextBlock x:Name="PlaybackStatusText" TextTrimming="CharacterEllipsis" MaxLines="1"
                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                        Style="{StaticResource CaptionTextBlockStyle}" />
                         </StackPanel>

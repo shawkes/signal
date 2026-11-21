@@ -73,6 +73,7 @@ public sealed partial class MainWindow : Window
         RollView.AutomationPointsRequested += ShowAutomationPoints;
         WorkspaceTabs.Loaded += OnLoaded;
         AppWindow.Closing += WindowClosing;
+        Activated += TransportWindowActivated;
         Closed += OnClosed;
         _uiTimer = DispatcherQueue.CreateTimer();
         _uiTimer.Interval = TimeSpan.FromMilliseconds(125);
@@ -740,8 +741,8 @@ public sealed partial class MainWindow : Window
             !audioReady ? "Check the audio output in Recording settings" :
                 _loadingBank ? "Loading SoundFont…" :
                 _bank is null ? "Load a SoundFont in Recording settings" : "");
-        PlaybackStatusText.Text = status;
-        PlaybackStatusText.Visibility = status.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+        // Reserve one caption line even when the transport has no status to display.
+        PlaybackStatusText.Text = status.Length == 0 ? "\u00a0" : status;
     }
 
     private void OnClosed(object sender, WindowEventArgs args)

@@ -5,16 +5,26 @@ using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Windows.System;
-using Windows.UI.Core;
+using CoreVirtualKeyStates = Windows.UI.Core.CoreVirtualKeyStates;
 
 namespace Signal.Native.Windows.App;
 
 public sealed partial class MainWindow
 {
+    private bool _transportSpaceDown;
+
     private void TransportKeyDown(object sender, KeyRoutedEventArgs args)
     {
-        if (args.Handled || !CanSeek || !ReferenceEquals(WorkspaceTabs.SelectedItem, PianoRollTab) ||
-            args.Key is not (VirtualKey.Space or VirtualKey.Home or VirtualKey.Left or VirtualKey.Right))
+        if (args.Handled || !ReferenceEquals(WorkspaceTabs.SelectedItem, PianoRollTab))
+            return;
+
+        if (args.Key == VirtualKey.Space)
+        {
+            HandleTransportSpace(args);
+            return;
+        }
+
+        if (!CanSeek || args.Key is not (VirtualKey.Home or VirtualKey.Left or VirtualKey.Right))
             return;
 
         bool horizontal = args.Key is VirtualKey.Left or VirtualKey.Right;
@@ -26,10 +36,7 @@ public sealed partial class MainWindow
         for (var element = args.OriginalSource as DependencyObject; element is not null && element != WorkspaceTabs;
              element = VisualTreeHelper.GetParent(element))
         {
-            if (element is TextBox or RichEditBox or NumberBox or Selector or RangeBase or MenuBar)
-                return;
-            if (args.Key == VirtualKey.Space && element is ButtonBase { FocusState: FocusState.Keyboard } button &&
-                button != PlayButton)
+            if (element is TextBox or RichEditBox or NumberBox or Selector or RangeBase || element == MainMenu)
                 return;
             if (element == RollView && (RollView.HasActiveGesture ||
                 (horizontal && !shift && !control && RollView.HasNoteSelection)))
@@ -39,10 +46,6 @@ public sealed partial class MainWindow
         args.Handled = true;
         switch (args.Key)
         {
-            case VirtualKey.Space:
-                if (!args.KeyStatus.WasKeyDown)
-                    ToggleSongPlayback();
-                break;
             case VirtualKey.Home:
                 RewindSong();
                 break;
@@ -51,6 +54,57 @@ public sealed partial class MainWindow
                 StepPlayhead(forward: args.Key == VirtualKey.Right, byBar: shift);
                 break;
         }
+    }
+
+    private void HandleTransportSpace(KeyRoutedEventArgs args)
+    {
+        if (_transportSpaceDown)
+        {
+            args.Handled = true;
+            return;
+        }
+        if (IsTransportModifierDown(VirtualKey.Control) || IsTransportModifierDown(VirtualKey.Shift) ||
+            IsTransportModifierDown(VirtualKey.Menu) || IsTransportModifierDown(VirtualKey.LeftWindows) ||
+            IsTransportModifierDown(VirtualKey.RightWindows))
+            return;
+
+        var focused = args.OriginalSource as DependencyObject;
+        if (focused is null && WorkspaceTabs.XamlRoot is { } root)
+            focused = FocusManager.GetFocusedElement(root) as DependencyObject;
+        for (var element = focused; element is not null && element != WorkspaceTabs;
+             element = VisualTreeHelper.GetParent(element))
+        {
+            if (element is TextBox or RichEditBox or PasswordBox or NumberBox or
+                ComboBox { IsDropDownOpen: true } or MenuFlyoutPresenter or ContentDialog or Popup)
+                return;
+        }
+
+        // Own both halves of the key press so a focused toolbar button cannot act on release.
+        args.Handled = true;
+        _transportSpaceDown = true;
+        if (!args.KeyStatus.WasKeyDown && CanSeek && !RollView.HasActiveGesture)
+            ToggleSongPlayback();
+    }
+
+    private void TransportMenuKeyDown(object sender, KeyRoutedEventArgs args)
+    {
+        if (!args.Handled && args.Key == VirtualKey.Space && ReferenceEquals(WorkspaceTabs.SelectedItem, PianoRollTab))
+            HandleTransportSpace(args);
+    }
+
+    private void TransportKeyUp(object sender, KeyRoutedEventArgs args)
+    {
+        if (args.Key != VirtualKey.Space || !_transportSpaceDown)
+            return;
+
+        _transportSpaceDown = false;
+        args.Handled = true;
+    }
+
+    private void TransportWindowActivated(object sender, WindowActivatedEventArgs args)
+    {
+        if (args.WindowActivationState == WindowActivationState.Deactivated)
+            _transportSpaceDown = false;
     }
 
     private static bool IsTransportModifierDown(VirtualKey key) =>
