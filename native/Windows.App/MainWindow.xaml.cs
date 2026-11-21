@@ -61,10 +61,15 @@ public sealed partial class MainWindow : Window
         AppWindow.Resize(new SizeInt32(1200, 780));
         TakeList.ItemsSource = _rows;
         RollView.LoopRangeSelected += LoopRangeSelected;
+        RollView.ClearLoopRangeRequested += () => ChangeLoop(null, _loopEnabled);
         RollView.PlayheadPositionSelected += SeekPlayhead;
         RollView.TempoMarkerEdited += EditTempoMarker;
         RollView.TempoMarkerMoved += MoveTempoMarker;
         RollView.TempoUndoRequested += UndoTempoMarkerEdit;
+        RollView.NotePreviewRequested += PreviewEditedNote;
+        RollView.PitchPreviewRequested += AuditionKey;
+        RollView.ChannelPointEdited += EditChannelPoint;
+        RollView.AutomationPointsRequested += ShowAutomationPoints;
         WorkspaceTabs.Loaded += OnLoaded;
         AppWindow.Closing += WindowClosing;
         Closed += OnClosed;
@@ -530,7 +535,8 @@ public sealed partial class MainWindow : Window
         {
             tick = _audioFailed ? null : _engine?.PlaybackTick;
         }
-        RollView.SetPlayhead(SongCaptureInProgress ? tick : tick ?? _pausedTick ?? _cueTick, reveal);
+        RollView.SetPlayhead(SongCaptureInProgress ? tick : tick ?? _pausedTick ?? _cueTick, reveal,
+            showCueMarker: !tick.HasValue && !CaptureInProgress);
         if (_trackEditor is not null)
             UpdateMeterButton(tick);
         if (tick is null && !SongCaptureInProgress)

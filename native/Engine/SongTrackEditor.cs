@@ -3,6 +3,10 @@ namespace Signal.Native.Engine;
 /// <summary>A SoundFont bank and MIDI program. Percussion presets use bank 128.</summary>
 public readonly record struct TrackSound(int Bank, byte Program);
 
+public enum ChannelControl : byte { Volume = 7, Pan = 10 }
+
+public readonly record struct ChannelControlPoint(long Tick, byte Value);
+
 /// <summary>A track retains its identity, source index, and note undo history through track edits.</summary>
 public sealed class EditableSongTrack
 {
@@ -109,9 +113,74 @@ public sealed class SongTrackEditor
     {
         bool solo = _tracks.Any(track => track.IsSoloed);
         bool IsAudible(EditableSongTrack track) => !track.IsMuted && (!solo || track.IsSoloed);
+        var audibleChannels = _tracks.Where(IsAudible).SelectMany(track => track.Document.Notes)
+            .Select(item => item.Note.Channel).ToHashSet();
         return new Song(TempoMap, _tracks.Select(track => IsAudible(track)
             ? new SongTrack(track.Name, track.Document.CreatePlaybackSnapshot(), track.PlaybackMessages, endTick)
-            : new SongTrack(track.Name, [], endTick: endTick)), meterMap: MeterMap);
+            : new SongTrack(track.Name, [], track.PlaybackMessages.Where(message =>
+                (message.Status & 0xf0) == 0xb0 && message.Data1 is 7 or 10 or 39 or 42 &&
+                audibleChannels.Contains((byte)(message.Status & 0x0f))), endTick)), meterMap: MeterMap);
+    }
+
+    public static byte DefaultControlValue(ChannelControl control) => control == ChannelControl.Volume ? (byte)100 : (byte)64;
+
+    private static bool MatchesControl(SongChannelMessage message, byte channel, ChannelControl control) =>
+        message.Status == (0xb0 | channel) && message.Data1 == (byte)control;
+
+    public ChannelControlPoint[] GetChannelControlPoints(byte channel, ChannelControl control) =>
+        _tracks.SelectMany(track => track.PlaybackMessages)
+            .Where(message => MatchesControl(message, channel, control))
+            .GroupBy(message => message.Tick)
+            .OrderBy(group => group.Key)
+            .Select(group => new ChannelControlPoint(group.Key, group.Last().Data2)).ToArray();
+
+    public byte GetOpeningControlValue(byte channel, ChannelControl control)
+    {
+        byte value = DefaultControlValue(control);
+        foreach (var track in _tracks)
+            foreach (var message in track.PlaybackMessages)
+                if (message.Tick == 0 && MatchesControl(message, channel, control))
+                    value = message.Data2;
+        return value;
+    }
+
+    public bool EditChannelControl(EditableSongTrack track, ChannelControl control, long tick, byte? value,
+        long? previousTick = null)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(tick);
+        ArgumentOutOfRangeException.ThrowIfNegative(previousTick ?? 0);
+        if (value > 127)
+            throw new ArgumentOutOfRangeException(nameof(value));
+        if (!_tracks.Contains(track))
+            return false;
+
+        byte channel = track.PrimaryChannel;
+        bool Match(SongChannelMessage message) => MatchesControl(message, channel, control) &&
+            (message.Tick == tick || message.Tick == previousTick);
+        var current = _tracks.SelectMany(item => item.PlaybackMessages).Where(Match).ToArray();
+        if ((!value.HasValue && current.Length == 0) ||
+            (value.HasValue && current.Length == 1 && current[0].Tick == tick && current[0].Data2 == value))
+            return false;
+
+        var previous = new List<(EditableSongTrack Track, IReadOnlyList<SongChannelMessage> Messages)>();
+        foreach (var item in _tracks)
+        {
+            var messages = item.PlaybackMessages;
+            bool add = ReferenceEquals(item, track) && value.HasValue;
+            if (!add && !messages.Any(Match))
+                continue;
+            previous.Add((item, messages));
+            var retained = messages.Where(message => !Match(message));
+            if (add)
+                retained = retained.Append(new(tick, (byte)(0xb0 | channel), (byte)control, value!.Value));
+            item.PlaybackMessages = Array.AsReadOnly(retained.ToArray());
+        }
+        Commit(() =>
+        {
+            foreach (var (item, messages) in previous)
+                item.PlaybackMessages = messages;
+        });
+        return true;
     }
 
     /// <summary>Replaces the tempo points as one edit, retaining the song's tick resolution.</summary>
@@ -215,6 +284,22 @@ public sealed class SongTrackEditor
         return true;
     }
 
+    public EditableSongTrack? DuplicateTrack(EditableSongTrack track)
+    {
+        int index = _tracks.IndexOf(track);
+        if (index < 0)
+            return null;
+
+        string prefix = string.IsNullOrWhiteSpace(track.Name) ? $"Track {index + 1} copy" : $"{track.Name} copy";
+        var copy = new EditableSongTrack(new SongTrack(UniqueTrackName(prefix),
+            track.Document.CreatePlaybackSnapshot(), track.PlaybackMessages, track.EndTick),
+            sourceIndex: null, primaryChannel: track.PrimaryChannel);
+        int insertion = index + 1;
+        Insert(insertion, copy);
+        Commit(() => RemoveAt(insertion));
+        return copy;
+    }
+
     public bool RenameTrack(EditableSongTrack track, string name)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
@@ -288,16 +373,20 @@ public sealed class SongTrackEditor
 
     private EditableSongTrack AddTrack(string prefix, byte channel, SongChannelMessage[] messages)
     {
-        int suffix = 1;
-        string name = prefix;
-        while (_tracks.Any(track => string.Equals(track.Name, name, StringComparison.OrdinalIgnoreCase)))
-            name = $"{prefix} {++suffix}";
-
-        var track = new EditableSongTrack(new SongTrack(name, [], messages), sourceIndex: null, primaryChannel: channel);
+        var track = new EditableSongTrack(new SongTrack(UniqueTrackName(prefix), [], messages), sourceIndex: null, primaryChannel: channel);
         int index = _tracks.Count;
         Insert(index, track);
         Commit(() => RemoveAt(index));
         return track;
+    }
+
+    private string UniqueTrackName(string prefix)
+    {
+        int suffix = 1;
+        string name = prefix;
+        while (_tracks.Any(track => string.Equals(track.Name, name, StringComparison.OrdinalIgnoreCase)))
+            name = $"{prefix} {++suffix}";
+        return name;
     }
 
     public TrackSound GetChannelSound(byte channel)

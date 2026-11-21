@@ -24,7 +24,7 @@ public sealed partial class PianoRollView : UserControl
     private const double BeatWidth = 96;
     private const double KeyboardWidth = 68;
     private const double DrumKeyboardWidth = 122;
-    private const double TimelineHeight = 30;
+    private const double TimelineHeight = 44;
     private static readonly string[] PitchNames = ["C", "C♯", "D", "D♯", "E", "F", "F♯", "G", "G♯", "A", "A♯", "B"];
     private static readonly string[] DrumNames =
     [
@@ -39,6 +39,8 @@ public sealed partial class PianoRollView : UserControl
     ];
 
     private readonly Rectangle _rulerCursor = new() { Width = 2, Height = TimelineHeight };
+    private const double CueMarkerWidth = 23;
+    private readonly Polygon _cueMarker = new() { Points = [new(0, 19), new(CueMarkerWidth, 19), new(11.5, 34)] };
     private readonly TranslateTransform _cursorOffset = new();
     private readonly TranslateTransform _rulerCursorOffset = new();
     private readonly TranslateTransform _timelineOffset = new();
@@ -54,6 +56,7 @@ public sealed partial class PianoRollView : UserControl
     private byte _defaultChannel;
     private long _timelineEnd;
     private long? _playhead;
+    private bool _showCueMarker;
     private long _entryTick;
     private byte _entryPitch = 60;
     private (long Tick, byte Pitch, bool Recenter)? _reveal = (0, 60, true);
@@ -69,11 +72,13 @@ public sealed partial class PianoRollView : UserControl
     public PianoRollView()
     {
         InitializeComponent();
+        InitializeChannelLanes();
         Cursor.RenderTransform = _cursorOffset;
         _rulerCursor.RenderTransform = _rulerCursorOffset;
         Timeline.RenderTransform = _timelineOffset;
         TimelineViewport.Clip = _timelineClip;
         RulerCursorLayer.Children.Add(_rulerCursor);
+        RulerCursorLayer.Children.Add(_cueMarker);
         Loaded += (_, _) =>
         {
             RefreshViewport();
@@ -121,6 +126,8 @@ public sealed partial class PianoRollView : UserControl
         if (ReferenceEquals(_document, document) && _ticksPerBeat == ticksPerQuarter && _defaultChannel == defaultChannel)
             return;
 
+        CancelAutomationDrag();
+        SetVelocityHover(null);
         CancelTempoGesture();
         TempoInput.ReleasePointerCaptures();
         CloseTempoMarkerEditor();
@@ -150,7 +157,6 @@ public sealed partial class PianoRollView : UserControl
         if (ShowsDrumLanes != previousDrumMode)
         {
             PitchColumn.Width = new GridLength(LaneLabelWidth);
-            PitchHeader.Text = ShowsDrumLanes ? "Drum" : "Pitch";
             PaintPitchLanes();
         }
         _selectedIds.Clear();
@@ -195,10 +201,11 @@ public sealed partial class PianoRollView : UserControl
         DispatcherQueue.TryEnqueue(DispatcherQueuePriority.Low, ApplyReveal);
     }
 
-    public void SetPlayhead(long? tick, bool reveal = false)
+    public void SetPlayhead(long? tick, bool reveal = false, bool showCueMarker = false)
     {
         long? previous = _playhead;
         _playhead = tick;
+        _showCueMarker = showCueMarker;
         if (tick is { } position && _recordingDocument is not null)
             ExtendTakeTimeline(position);
         RefreshPlayhead();
@@ -222,7 +229,7 @@ public sealed partial class PianoRollView : UserControl
         Corner.Background = RulerInput.Background = _palette.Ruler;
         TempoHeader.Background = TempoInput.Background = _palette.Ruler;
         PitchKeys.Background = _palette.Ruler;
-        Cursor.Fill = _rulerCursor.Fill = _palette.Playhead;
+        Cursor.Fill = _rulerCursor.Fill = _cueMarker.Fill = _palette.Playhead;
         GridLoopShade.Fill = RulerLoopFill.Fill = RulerLoopStart.Fill = RulerLoopEnd.Fill = _palette.Loop;
         SelectionBox.Fill = SelectionBox.Stroke = _palette.Loop;
         RecolorRecordingLayers();
@@ -312,6 +319,7 @@ public sealed partial class PianoRollView : UserControl
             RefreshTempoLane();
             RefreshLoopRangeVisuals();
             RefreshPlayhead();
+            PaintAutomationLane();
         }
 
         RefreshRecordingViewport(left, top, width, height);
@@ -372,6 +380,23 @@ public sealed partial class PianoRollView : UserControl
             accidental ? _palette.AccidentalKeyText : _palette.NaturalKeyText, pitch % 12 == 0);
     }
 
+    private void PitchKeyPressed(object sender, PointerRoutedEventArgs args)
+    {
+        var point = args.GetCurrentPoint(PitchKeys);
+        if (_document is null || !point.Properties.IsLeftButtonPressed)
+            return;
+
+        int pitch = PitchCount - 1 - (int)((point.Position.Y + EditorScroll.VerticalOffset) / RowHeight);
+        if (pitch is < 0 or >= PitchCount)
+            return;
+
+        Focus(FocusState.Pointer);
+        PitchPreviewRequested?.Invoke(new SongNote(0, 0, _defaultChannel, (byte)pitch, 96));
+        args.Handled = true;
+    }
+
+    public event Action<SongNote>? PitchPreviewRequested;
+
     private void EditorViewChanged(object sender, ScrollViewerViewChangedEventArgs args)
     {
         if (args.IsIntermediate && IsLoaded && !HasActiveGesture)
@@ -391,7 +416,7 @@ public sealed partial class PianoRollView : UserControl
         if (_pointerId is not null)
             PreviewGesture(EditPointerOnSurface());
         if (_rulerPointerId is not null)
-            PreviewLoopDrag(_rulerPointerX);
+            PreviewRulerDrag(_rulerPointerX);
         if (_reveal is not null)
             DispatcherQueue.TryEnqueue(DispatcherQueuePriority.Low, ApplyReveal);
     }
@@ -440,9 +465,10 @@ public sealed partial class PianoRollView : UserControl
 
     private void RefreshPlayhead()
     {
-        if (_playhead is not { } tick)
+        if ((_rulerCuePreview ?? _playhead) is not { } tick)
         {
             Cursor.Visibility = _rulerCursor.Visibility = Visibility.Collapsed;
+            _cueMarker.Visibility = Visibility.Collapsed;
             return;
         }
         double x = TickX(tick);
@@ -450,6 +476,16 @@ public sealed partial class PianoRollView : UserControl
         Cursor.Visibility = Visibility.Visible;
         _rulerCursor.Visibility = relativeX >= 0 && relativeX < EditorScroll.ViewportWidth
             ? Visibility.Visible : Visibility.Collapsed;
+        _cueMarker.Visibility = (_showCueMarker || _rulerCuePreview.HasValue) ? _rulerCursor.Visibility : Visibility.Collapsed;
+        if (_cueMarker.Visibility == Visibility.Visible)
+        {
+            double tip = relativeX + 1;
+            double left = Math.Clamp(tip - CueMarkerWidth / 2, 0, Math.Max(0, EditorScroll.ViewportWidth - CueMarkerWidth));
+            var point = new Point(tip - left, 34);
+            if (_cueMarker.Points[2] != point)
+                _cueMarker.Points[2] = point;
+            Canvas.SetLeft(_cueMarker, left);
+        }
         _cursorOffset.X = x;
         _rulerCursorOffset.X = relativeX;
     }

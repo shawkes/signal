@@ -38,8 +38,10 @@ public sealed partial class PianoRollView
             Visibility = Visibility.Collapsed
         };
         var apply = new Button { Content = existing ? "Apply" : "Add tempo" };
+        var cancel = new Button { Content = "Cancel" };
         var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
         actions.Children.Add(apply);
+        actions.Children.Add(cancel);
         var panel = new StackPanel { MinWidth = 185, MaxWidth = 330, Spacing = 8 };
         panel.Children.Add(input);
         panel.Children.Add(error);
@@ -77,6 +79,7 @@ public sealed partial class PianoRollView
             error.Visibility = apply.IsEnabled ? Visibility.Collapsed : Visibility.Visible;
         };
         apply.Click += (_, _) => Apply();
+        cancel.Click += (_, _) => CloseTempoMarkerEditor();
         if (existing && tick > 0)
         {
             var remove = new Button { Content = "Remove" };
@@ -99,7 +102,7 @@ public sealed partial class PianoRollView
                 CloseTempoMarkerEditor();
                 TempoUndoRequested?.Invoke();
             };
-            actions.Children.Add(undo);
+            panel.Children.Add(undo);
         }
         input.KeyDown += (_, args) =>
         {

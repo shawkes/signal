@@ -6,6 +6,7 @@
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="MeltySynth" Version="2.4.1" />
+    <PackageReference Include="OggVorbisEncoder" Version="1.2.2" />
     <ProjectReference Include="../Engine/Signal.Native.Engine.csproj" />
   </ItemGroup>
 </Project>

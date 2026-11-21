@@ -9,6 +9,23 @@ public sealed class NotePlaybackTests
     private const long Origin = 10_000;
 
     [Fact]
+    public void EditorPreviewMixesWithPlaybackWithoutChangingTransportOrRecording()
+    {
+        var engine = Create();
+        engine.SetRecording(true, 0, timestamp: Origin);
+        var note = new SongNote(0, 400, 0, 60, 96);
+        engine.PreviewNote(note with { StartTick = 10_000 }, new GateSynth(0.2f));
+        Assert.Equal(0.2f, Render(engine, Origin, 100)[0]);
+        Assert.Null(engine.PlaybackTick);
+        Assert.False(engine.TryReadNote(out _));
+
+        Assert.True(engine.PlayNotes([note], new GateSynth(0.3f)));
+        Assert.Equal(0.5f, Render(engine, Origin + 100, 100)[0]);
+        Assert.Equal(0.3f, Render(engine, Origin + 200, 6_000)[^1]);
+        Assert.NotNull(engine.PlaybackTick);
+    }
+
+    [Fact]
     public void SchedulesAnEditedSnapshotAcrossBuffersWithoutRecordingIt()
     {
         var engine = Create();

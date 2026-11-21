@@ -16,6 +16,7 @@ public sealed class LatencyEngine
     private readonly AudioSampleClock _clock;
     private readonly Recording _recording;
     private readonly NotePlayback _playback;
+    private readonly NotePlayback _notePreview;
     private readonly MetronomeMixer _mixMetronome;
     private readonly MeterMap _defaultMeter;
     private readonly float[] _accent;
@@ -53,6 +54,7 @@ public sealed class LatencyEngine
         _recording = new Recording(tempoMap, sampleRate);
         _defaultMeter = new MeterMap(tempoMap.TicksPerQuarter, []);
         _playback = new NotePlayback(sampleRate, _defaultMeter);
+        _notePreview = new NotePlayback(sampleRate, _defaultMeter);
         _mixMetronome = MixClicks;
         _accent = BuildClick(sampleRate, 1600, 0.25f);
         _beat = BuildClick(sampleRate, 1100, 0.16f);
@@ -121,6 +123,15 @@ public sealed class LatencyEngine
     public bool PlayNotes(IEnumerable<SongNote> notes, IMonitorSynth playbackSynth) =>
         Volatile.Read(ref _songTake) is null &&
         RequestPlayback(_playback.Prepare(notes, [], TempoMap, playbackSynth));
+
+    /// <summary>Plays a short editor preview through its own synth without moving the transport or recording MIDI.</summary>
+    public void PreviewNote(SongNote note, IMonitorSynth previewSynth)
+    {
+        var preview = note with { StartTick = 0, LengthTicks = PreviewTempo.TicksPerQuarter / 4 };
+        _notePreview.Request(_notePreview.Prepare([preview], [], PreviewTempo, previewSynth));
+    }
+
+    private static readonly TempoMap PreviewTempo = TempoMap.Constant(120);
 
     /// <summary>Plays all tracks together on their own tempo map, without changing the recording clock.</summary>
     public bool PlaySong(Song song, IMonitorSynth playbackSynth, LoopRange? loop = null, long startTick = 0,
@@ -420,6 +431,7 @@ public sealed class LatencyEngine
             _recording.ReachDownbeat();
         if (mixedFrame < endFrame)
             MixTransport(interleavedStereo[(int)((mixedFrame - firstFrame) * 2)..], mixedFrame);
+        _notePreview.Render(interleavedStereo, firstFrame, PreviewTempo, null);
         if (_activeSongTake is { } take)
         {
             Volatile.Write(ref take.ElapsedFrames, endFrame - take.SongStartFrame);

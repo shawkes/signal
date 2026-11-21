@@ -1,6 +1,8 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
+using Microsoft.UI.Xaml.Controls.Primitives;
+using Windows.Foundation;
 using Microsoft.UI.Xaml.Shapes;
 using Signal.Native.Engine;
 
@@ -20,6 +22,7 @@ public sealed partial class PianoRollView
     private double _rulerPressX;
     private double _rulerPointerX;
     private long _rulerAnchorTick;
+    private long? _rulerCuePreview;
     private RulerDrag _rulerDrag;
 
     public event Action<LoopRange>? LoopRangeSelected;
@@ -65,9 +68,9 @@ public sealed partial class PianoRollView
         Focus(FocusState.Pointer);
         _rulerPointerId = args.Pointer.PointerId;
         _rulerPressX = _rulerPointerX = x;
-        _rulerDrag = RulerDrag.New;
-        _rulerAnchorTick = SnapRulerTick(x);
-        if (_showLoopHandles && _loopRange is { } range)
+        _rulerDrag = RulerDrag.Playhead;
+
+        if (point.Position.Y >= 35 && _showLoopHandles && _loopRange is { } range)
         {
             if (HitsRulerHandle(range.StartTick, x))
             {
@@ -84,12 +87,53 @@ public sealed partial class PianoRollView
         args.Handled = true;
     }
 
+    private void RulerContextRequested(UIElement sender, ContextRequestedEventArgs args)
+    {
+        if (!_editingEnabled || !_loopRangeEditable || _document is null || _rulerPointerId is not null)
+            return;
+
+        bool hasPosition = args.TryGetPosition(RulerInput, out var position);
+        long tick = hasPosition ? SnapRulerTick(position.X) : _playhead ?? 0;
+        var range = _showLoopHandles ? _loopRange : null;
+        var menu = new MenuFlyout();
+        var start = new MenuFlyoutItem { Text = "Set loop in" };
+        start.Click += (_, _) =>
+        {
+            long barLength = _meterMap.NextBarTick(tick) - _meterMap.PositionAt(tick).BarTick;
+            long suggestedEnd = long.CreateSaturating((Int128)tick + barLength);
+            long end = range is { EndTick: var currentEnd } && currentEnd > tick ? currentEnd : suggestedEnd;
+            if (_loopRangeEditable && end > tick)
+                LoopRangeSelected?.Invoke(new(tick, end));
+        };
+        var finish = new MenuFlyoutItem { Text = "Set loop out", IsEnabled = tick > (range?.StartTick ?? 0) };
+        finish.Click += (_, _) =>
+        {
+            if (_loopRangeEditable)
+                LoopRangeSelected?.Invoke(new(range?.StartTick ?? 0, tick));
+        };
+        menu.Items.Add(start);
+        menu.Items.Add(finish);
+        if (range is not null)
+        {
+            var clear = new MenuFlyoutItem { Text = "Clear loop markers" };
+            clear.Click += (_, _) => ClearLoopRangeRequested?.Invoke();
+            menu.Items.Add(clear);
+        }
+        args.Handled = true;
+        if (hasPosition)
+            menu.ShowAt(RulerInput, new FlyoutShowOptions { Position = position });
+        else
+            menu.ShowAt(RulerInput);
+    }
+
+    public event Action? ClearLoopRangeRequested;
+
     private void RulerPointerMoved(object sender, PointerRoutedEventArgs args)
     {
         if (_rulerPointerId != args.Pointer.PointerId)
             return;
 
-        PreviewLoopDrag(args.GetCurrentPoint(RulerInput).Position.X);
+        PreviewRulerDrag(args.GetCurrentPoint(RulerInput).Position.X);
         UpdateDragScroll();
 
         args.Handled = true;
@@ -100,15 +144,16 @@ public sealed partial class PianoRollView
         if (_rulerPointerId != args.Pointer.PointerId)
             return;
 
-        PreviewLoopDrag(args.GetCurrentPoint(RulerInput).Position.X);
+        PreviewRulerDrag(args.GetCurrentPoint(RulerInput).Position.X);
         var selected = _loopPreview;
+        var cue = _rulerCuePreview;
         CancelRulerGesture();
         RulerInput.ReleasePointerCapture(args.Pointer);
         args.Handled = true;
         if (selected is { } range)
             LoopRangeSelected?.Invoke(range);
-        else
-            PlayheadPositionSelected?.Invoke(TickOfCell(CellNearestTick(long.CreateSaturating(Math.Round(RulerTickAt(_rulerPointerX))))));
+        else if (cue is long tick)
+            PlayheadPositionSelected?.Invoke(tick);
     }
 
     private void RulerPointerCanceled(object sender, PointerRoutedEventArgs args)
@@ -122,6 +167,11 @@ public sealed partial class PianoRollView
         if (_rulerPointerId is not null)
             _dragScrollTimer?.Stop();
         _rulerPointerId = null;
+        if (_rulerCuePreview.HasValue)
+        {
+            _rulerCuePreview = null;
+            RefreshPlayhead();
+        }
         if (_loopPreview is null)
             return;
 
@@ -129,24 +179,24 @@ public sealed partial class PianoRollView
         RefreshLoopRangeVisuals();
     }
 
-    private void PreviewLoopDrag(double x)
+    private void PreviewRulerDrag(double x)
     {
         _rulerPointerX = x;
+        if (_rulerDrag == RulerDrag.Playhead)
+        {
+            _rulerCuePreview = Math.Min(_timelineEnd,
+                TickOfCell(CellNearestTick(long.CreateSaturating(Math.Round(RulerTickAt(x))))));
+            RefreshPlayhead();
+            return;
+        }
         if (_loopPreview is null && Math.Abs(x - _rulerPressX) < 4)
             return;
 
         long tick = SnapRulerTick(x);
         long anchor = _rulerAnchorTick;
-        LoopRange candidate = _rulerDrag switch
-        {
-            RulerDrag.Start => new(Math.Min(tick, PreviousBeat(anchor)), anchor),
-            RulerDrag.End => new(anchor, Math.Max(tick, NextBeat(anchor))),
-            _ when tick < anchor => new(tick, anchor),
-            _ when tick > anchor => new(anchor, tick),
-            _ when x < _rulerPressX && anchor > 0 => new(PreviousBeat(anchor), anchor),
-            _ when anchor < long.MaxValue => new(anchor, NextBeat(anchor)),
-            _ => new(PreviousBeat(anchor), anchor)
-        };
+        LoopRange candidate = _rulerDrag == RulerDrag.Start
+            ? new(Math.Min(tick, PreviousBeat(anchor)), anchor)
+            : new(anchor, Math.Max(tick, NextBeat(anchor)));
         if (_loopPreview == candidate)
             return;
 
@@ -221,5 +271,5 @@ public sealed partial class PianoRollView
         rectangle.Width = end - start;
     }
 
-    private enum RulerDrag { New, Start, End }
+    private enum RulerDrag { Playhead, Start, End }
 }

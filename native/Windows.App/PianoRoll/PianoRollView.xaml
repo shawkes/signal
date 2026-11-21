@@ -47,6 +47,8 @@
                         <TextBlock Text="Undo" />
                     </StackPanel>
                 </Button>
+                <Button x:Name="VelocityButton" Click="VelocityClicked" Content="Velocity"
+                        ToolTipService.ToolTip="Edit selected velocities or show the velocity lane" />
             </StackPanel>
             <TextBlock x:Name="SelectionText" Grid.Column="1" VerticalAlignment="Center"
                        TextTrimming="CharacterEllipsis" Style="{StaticResource CaptionTextBlockStyle}" />
@@ -58,20 +60,22 @@
                 BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}">
             <Grid>
                 <Grid.RowDefinitions>
+                    <RowDefinition Height="44" />
                     <RowDefinition Height="32" />
-                    <RowDefinition Height="30" />
                     <RowDefinition Height="*" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition x:Name="PitchColumn" Width="68" />
                     <ColumnDefinition Width="*" />
                 </Grid.ColumnDefinitions>
-                <Border x:Name="TempoHeader" BorderThickness="0,0,1,1"
+                <Border x:Name="TempoHeader" Grid.Row="1" BorderThickness="0,0,1,1"
                         BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}">
                     <TextBlock Text="Tempo" Margin="10,0,0,0" VerticalAlignment="Center"
                                Style="{StaticResource CaptionTextBlockStyle}" />
                 </Border>
-                <Grid x:Name="TempoInput" Grid.Column="1" BorderThickness="0,0,0,1"
+                <Grid x:Name="TempoInput" Grid.Row="1" Grid.Column="1" BorderThickness="0,0,0,1"
                       BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                       AutomationProperties.Name="Song tempo lane"
                       ToolTipService.ToolTip="Click to add or edit a tempo. Drag a marker to move it."
@@ -80,28 +84,31 @@
                       PointerCanceled="TempoPointerCanceled">
                     <Canvas x:Name="TempoCanvas" IsHitTestVisible="False" />
                 </Grid>
-                <Border x:Name="Corner" Grid.Row="1" BorderThickness="0,0,1,1"
+                <Border x:Name="Corner" BorderThickness="0,0,1,1"
                         BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}">
-                    <TextBlock x:Name="PitchHeader" Text="Pitch" Margin="10,0,0,0" VerticalAlignment="Center"
+                    <TextBlock Text="Bars" Margin="10,0,0,0" VerticalAlignment="Center"
                                Style="{StaticResource CaptionTextBlockStyle}" />
                 </Border>
-                <Grid x:Name="RulerInput" Grid.Row="1" Grid.Column="1"
-                      AutomationProperties.Name="Loop range ruler"
-                      ToolTipService.ToolTip="Click to move the playhead. Drag to set a loop. Left/Right step by beat. Shift+Left/Right step by bar."
+                <Grid x:Name="RulerInput" Grid.Column="1"
+                      AutomationProperties.Name="Playhead and loop ruler"
+                      ToolTipService.ToolTip="Click or drag to move the playhead. Right-click to set loop markers."
+                      ContextRequested="RulerContextRequested"
                       PointerPressed="RulerPointerPressed" PointerMoved="RulerPointerMoved"
                       PointerReleased="RulerPointerReleased" PointerCaptureLost="RulerPointerCanceled"
                       PointerCanceled="RulerPointerCanceled">
                     <Canvas IsHitTestVisible="False">
-                        <Rectangle x:Name="RulerLoopFill" Height="29" Visibility="Collapsed" />
-                        <Rectangle x:Name="RulerLoopStart" Canvas.Top="22" Height="7" Visibility="Collapsed" />
-                        <Rectangle x:Name="RulerLoopEnd" Canvas.Top="22" Height="7" Visibility="Collapsed" />
+                        <Rectangle x:Name="RulerLoopFill" Height="43" Visibility="Collapsed" />
+                        <Rectangle x:Name="RulerLoopStart" Canvas.Top="35" Height="8" Visibility="Collapsed" />
+                        <Rectangle x:Name="RulerLoopEnd" Canvas.Top="35" Height="8" Visibility="Collapsed" />
                     </Canvas>
                     <Grid x:Name="TimelineViewport" IsHitTestVisible="False">
                         <Canvas x:Name="Timeline" />
                         <Canvas x:Name="RulerCursorLayer" />
                     </Grid>
                 </Grid>
-                <Canvas x:Name="PitchKeys" Grid.Row="2" IsHitTestVisible="False" />
+                <Canvas x:Name="PitchKeys" Grid.Row="2" PointerPressed="PitchKeyPressed"
+                        AutomationProperties.Name="Piano-roll audition keyboard"
+                        ToolTipService.ToolTip="Click a key to hear the selected instrument or drum." />
                 <ScrollViewer x:Name="EditorScroll" Grid.Row="2" Grid.Column="1"
                               HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto"
                               HorizontalScrollMode="Enabled" VerticalScrollMode="Enabled"
@@ -126,6 +133,20 @@
                         </Canvas>
                     </Grid>
                 </ScrollViewer>
+                <Border x:Name="AutomationLaneHeader" Grid.Row="3" Visibility="Collapsed"
+                        BorderThickness="0,1,1,0" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}">
+                    <StackPanel Spacing="3" Margin="4,4,2,0">
+                        <TextBlock Text="Velocity" Style="{StaticResource CaptionTextBlockStyle}" />
+                        <Button Content="Hide" Padding="4,2" Click="HideAutomationLaneClicked" />
+                    </StackPanel>
+                </Border>
+                <Grid x:Name="AutomationLane" Grid.Row="3" Grid.Column="1" Height="88" Visibility="Collapsed"
+                      BorderThickness="0,1,0,0" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                      Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                      ToolTipService.ToolTip="Select notes in the piano roll to edit velocity.">
+                    <Canvas x:Name="AutomationCanvas" IsHitTestVisible="False" />
+                </Grid>
+                <StackPanel x:Name="ChannelLanes" Grid.Row="4" Grid.ColumnSpan="2" />
             </Grid>
         </Border>
 

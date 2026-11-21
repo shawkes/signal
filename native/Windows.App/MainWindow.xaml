@@ -31,6 +31,9 @@
                             <KeyboardAccelerator Key="S" Modifiers="Control,Shift" />
                         </MenuFlyoutItem.KeyboardAccelerators>
                     </MenuFlyoutItem>
+                    <MenuFlyoutSubItem Text="Export">
+                        <MenuFlyoutItem x:Name="ExportOggMenuItem" Text="Ogg…" Click="ExportOggClicked" />
+                    </MenuFlyoutSubItem>
                 </MenuBarItem>
                 <MenuBarItem Title="Song">
                     <MenuFlyoutItem x:Name="CropSongMenuItem" Text="Crop song…" Click="CropSongClicked" />
@@ -156,24 +159,45 @@
                             </StackPanel>
                             <ListView x:Name="TrackList" Grid.Row="2" SelectionMode="Single"
                                       SelectionChanged="TrackChanged" AutomationProperties.Name="Song tracks">
+                                <ListView.ItemContainerStyle>
+                                    <Style TargetType="ListViewItem">
+                                        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                                    </Style>
+                                </ListView.ItemContainerStyle>
                                 <ListView.ItemTemplate>
                                     <DataTemplate x:DataType="local:TrackRow">
-                                        <StackPanel Spacing="2" Margin="2,5">
-                                            <TextBlock Text="{x:Bind Name}" TextTrimming="CharacterEllipsis"
-                                                       Style="{StaticResource BodyStrongTextBlockStyle}" />
-                                            <TextBlock Text="{x:Bind Detail}" TextTrimming="CharacterEllipsis"
-                                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                                       Style="{StaticResource CaptionTextBlockStyle}" />
-                                        </StackPanel>
+                                        <Grid ColumnSpacing="6" Margin="2,5" Background="Transparent">
+                                            <Grid.ContextFlyout>
+                                                <MenuFlyout>
+                                                    <MenuFlyoutItem Text="Duplicate track" Tag="{x:Bind Track}"
+                                                                    IsEnabled="{x:Bind CanMix, Mode=OneWay}" Click="DuplicateTrackClicked" />
+                                                </MenuFlyout>
+                                            </Grid.ContextFlyout>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <StackPanel Spacing="2">
+                                                <TextBlock Text="{x:Bind Name}" TextTrimming="CharacterEllipsis"
+                                                           Style="{StaticResource BodyStrongTextBlockStyle}" />
+                                                <TextBlock Text="{x:Bind Detail, Mode=OneWay}" TextTrimming="CharacterEllipsis"
+                                                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                                           Style="{StaticResource CaptionTextBlockStyle}" />
+                                            </StackPanel>
+                                            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+                                                <ToggleButton Content="M" Padding="6,3" Tag="{x:Bind Track}" Click="MuteTrackClicked"
+                                                              IsChecked="{x:Bind IsMuted, Mode=OneWay}" IsEnabled="{x:Bind CanMix, Mode=OneWay}"
+                                                              AutomationProperties.Name="{x:Bind MuteLabel}" ToolTipService.ToolTip="Mute track" />
+                                                <ToggleButton Content="S" Padding="6,3" Tag="{x:Bind Track}" Click="SoloTrackClicked"
+                                                              IsChecked="{x:Bind IsSoloed, Mode=OneWay}" IsEnabled="{x:Bind CanMix, Mode=OneWay}"
+                                                              AutomationProperties.Name="{x:Bind SoloLabel}" ToolTipService.ToolTip="Solo track" />
+                                            </StackPanel>
+                                        </Grid>
                                     </DataTemplate>
                                 </ListView.ItemTemplate>
                             </ListView>
                             <StackPanel Grid.Row="3" Spacing="8">
                                 <TextBlock x:Name="TrackChannelText" Style="{StaticResource BodyStrongTextBlockStyle}" />
-                                <StackPanel Orientation="Horizontal" Spacing="6">
-                                    <ToggleButton x:Name="MuteTrackButton" Content="Mute" Click="TrackMixClicked" />
-                                    <ToggleButton x:Name="SoloTrackButton" Content="Solo" Click="TrackMixClicked" />
-                                </StackPanel>
                                 <ComboBox x:Name="TrackSoundBox" Header="Sound" HorizontalAlignment="Stretch"
                                           SelectionChanged="TrackSoundChanged" />
                                 <ComboBox x:Name="MidiRoutingBox" Header="MIDI input routing" SelectedIndex="0"
@@ -185,6 +209,27 @@
                                 <TextBlock x:Name="TrackChannelHint" TextWrapping="Wrap" Visibility="Collapsed"
                                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                            Style="{StaticResource CaptionTextBlockStyle}" />
+                                <Button x:Name="TrackControlsButton" Content="Channel controls…" HorizontalAlignment="Stretch">
+                                    <Button.Flyout>
+                                        <Flyout x:Name="ChannelControlsFlyout" Placement="Right">
+                                            <StackPanel Spacing="12">
+                                                <StackPanel Orientation="Horizontal" Spacing="12">
+                                                    <TextBox x:Name="ChannelVolumeBox" Header="Opening volume" Width="132"
+                                                             InputScope="Number" LostFocus="ChannelControlLostFocus" KeyDown="ChannelControlKeyDown" />
+                                                    <Button Content="Show lane" VerticalAlignment="Bottom" Click="ShowVolumeLaneClicked"
+                                                            AutomationProperties.Name="Show volume lane" />
+                                                </StackPanel>
+                                                <StackPanel Orientation="Horizontal" Spacing="12">
+                                                    <TextBox x:Name="ChannelPanBox" Header="Opening pan" Width="132"
+                                                             InputScope="Number" LostFocus="ChannelControlLostFocus" KeyDown="ChannelControlKeyDown"
+                                                             ToolTipService.ToolTip="Negative is left, 0 is center, positive is right" />
+                                                    <Button Content="Show lane" VerticalAlignment="Bottom" Click="ShowPanLaneClicked"
+                                                            AutomationProperties.Name="Show pan lane" />
+                                                </StackPanel>
+                                            </StackPanel>
+                                        </Flyout>
+                                    </Button.Flyout>
+                                </Button>
                                 <StackPanel Orientation="Horizontal" Spacing="6">
                                     <Button x:Name="RenameTrackButton" Content="Rename…" Click="RenameTrackClicked" />
                                     <Button x:Name="RemoveTrackButton" Content="Remove track" Click="RemoveTrackClicked" />

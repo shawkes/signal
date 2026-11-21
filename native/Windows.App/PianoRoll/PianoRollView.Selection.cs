@@ -20,9 +20,11 @@ public sealed partial class PianoRollView
     private Point _editPointer;
     private bool _editDragStarted;
 
+    public event Action<SongNote>? NotePreviewRequested;
+
     internal bool HasNoteSelection => _selectedIds.Count > 0;
     internal bool HasActiveGesture => _pointerId is not null || _rulerPointerId is not null ||
-        _tempoPointerId is not null || _tempoMarkerFlyout is not null;
+        _tempoPointerId is not null || _tempoMarkerFlyout is not null || _automationPointerId is not null;
 
     private void RefreshSelection()
     {
@@ -32,6 +34,15 @@ public sealed partial class PianoRollView
         PasteButton.IsEnabled = CanPaste;
         UndoButton.IsEnabled = _editingEnabled && _document?.CanUndo is true;
         GridSizeBox.IsEnabled = _editingEnabled;
+        var velocities = SelectedNotes().Select(item => item.Note.Velocity).Distinct().Take(2).ToArray();
+        VelocityButton.Content = velocities.Length switch
+        {
+            1 => $"Velocity {velocities[0]}",
+            2 => "Velocity · Mixed",
+            _ => "Velocity"
+        };
+        if (_showVelocityLane)
+            PaintVelocityLane();
 
         SelectionText.Text = _selectedIds.Count switch
         {
@@ -144,8 +155,13 @@ public sealed partial class PianoRollView
     {
         if (_pointerId != args.Pointer.PointerId)
         {
-            if (ShowsDrumLanes && _pointerId is null)
-                ShowDrumHoverTip(HitNote(args.GetCurrentPoint(Surface).Position)?.Note.NoteNumber);
+            if (_pointerId is null && (ShowsDrumLanes || _showVelocityLane))
+            {
+                var hit = HitNote(args.GetCurrentPoint(Surface).Position);
+                if (ShowsDrumLanes)
+                    ShowDrumHoverTip(hit?.Note.NoteNumber);
+                SetVelocityHover(hit?.Id);
+            }
             return;
         }
         var point = args.GetCurrentPoint(Surface).Position;
@@ -155,7 +171,11 @@ public sealed partial class PianoRollView
         args.Handled = true;
     }
 
-    private void SurfacePointerExited(object sender, PointerRoutedEventArgs args) => ShowDrumHoverTip(null);
+    private void SurfacePointerExited(object sender, PointerRoutedEventArgs args)
+    {
+        ShowDrumHoverTip(null);
+        SetVelocityHover(null);
+    }
 
     private void RememberEditPointer(Point point) => _editPointer = new(
         point.X - EditorScroll.HorizontalOffset, point.Y - EditorScroll.VerticalOffset);
@@ -208,6 +228,7 @@ public sealed partial class PianoRollView
         PreviewGesture(point);
         var grabbed = _grabbedNote;
         var edited = _previewNotes;
+        bool moving = !_resizeDrag;
         bool selectionDrag = SelectionBox.Visibility == Visibility.Visible;
         CancelGesture();
         Surface.ReleasePointerCapture(args.Pointer);
@@ -216,7 +237,12 @@ public sealed partial class PianoRollView
         if (grabbed is { } item)
         {
             if (_document!.ReplaceMany(edited))
-                SetEntry(edited.First(note => note.Id == item.Id).Note);
+            {
+                var note = edited.First(note => note.Id == item.Id).Note;
+                SetEntry(note);
+                if (moving)
+                    NotePreviewRequested?.Invoke(note);
+            }
         }
         else if (selectionDrag)
         {
@@ -434,6 +460,7 @@ public sealed partial class PianoRollView
         long id = _document!.Add(note);
         SetEntry(note);
         SetSelection([id]);
+        NotePreviewRequested?.Invoke(note);
     }
 
     private void DeleteSelected()

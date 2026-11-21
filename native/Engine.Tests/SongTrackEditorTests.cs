@@ -6,6 +6,57 @@ namespace Signal.Native.Engine.Tests;
 public sealed class SongTrackEditorTests
 {
     [Fact]
+    public void OpeningVolumeUsesAnAudibleDefaultAndCanBeRestoredWithoutMovingLaterPoints()
+    {
+        var editor = Open(new SongTrack("Piano", [], [new SongChannelMessage(480, 0xb0, 7, 75)]));
+        var track = editor.Tracks[0];
+        Assert.Equal(100, editor.GetOpeningControlValue(0, ChannelControl.Volume));
+        Assert.True(editor.EditChannelControl(track, ChannelControl.Volume, 0, 0));
+        Assert.Equal(0, editor.GetOpeningControlValue(0, ChannelControl.Volume));
+        Assert.True(editor.EditChannelControl(track, ChannelControl.Volume, 0, 100, previousTick: 0));
+        Assert.Equal(new[] { new ChannelControlPoint(0, 100), new ChannelControlPoint(480, 75) },
+            editor.GetChannelControlPoints(0, ChannelControl.Volume));
+    }
+
+    [Fact]
+    public void MovingPanPointOnSharedChannelIsUndoableAndFollowsAudibleNotes()
+    {
+        var original = new SongChannelMessage(240, 0xb2, 10, 40);
+        var editor = Open(new SongTrack("Piano", [new SongNote(0, 960, 2, 61, 80)]),
+            new SongTrack("Pan automation", [], [original]));
+        var piano = editor.Tracks[0];
+        piano.IsSoloed = true;
+        Assert.Equal(original, Assert.Single(editor.SnapshotBackingSong(960).Tracks.SelectMany(track => track.PlaybackMessages)));
+        Assert.True(editor.EditChannelControl(piano, ChannelControl.Pan, 480, 80, previousTick: 240));
+        Assert.Equal(new ChannelControlPoint(480, 80), Assert.Single(editor.GetChannelControlPoints(2, ChannelControl.Pan)));
+        Assert.Equal(original with { Tick = 480, Data2 = 80 },
+            Assert.Single(editor.SnapshotSong().Tracks.SelectMany(track => track.PlaybackMessages)));
+        Assert.True(editor.UndoTrackEdit());
+        Assert.Equal(new ChannelControlPoint(240, 40), Assert.Single(editor.GetChannelControlPoints(2, ChannelControl.Pan)));
+    }
+
+    [Fact]
+    public void DuplicateTrackCopiesEditedNotesAndControllersAsAnUndoableNewTrack()
+    {
+        var note = new SongNote(480, 240, 2, 61, 80);
+        var pan = new SongChannelMessage(120, 0xb2, 10, 30);
+        var editor = Open(new SongTrack("Piano", [], [pan], 960));
+        var original = editor.Tracks[0];
+        original.Document.Add(note);
+
+        var copy = Assert.IsType<EditableSongTrack>(editor.DuplicateTrack(original));
+        Assert.Same(copy, editor.Tracks[1]);
+        Assert.Equal("Piano copy", copy.Name);
+        Assert.Equal(note, Assert.Single(copy.Document.Notes).Note);
+        Assert.Equal(pan, Assert.Single(copy.PlaybackMessages));
+        Assert.Equal(960, copy.EndTick);
+        Assert.Equal(new int?[] { 0, null }, editor.CreateSourceIndices());
+        Assert.True(editor.UndoTrackEdit());
+        Assert.Same(original, Assert.Single(editor.Tracks));
+        Assert.Equal(note, Assert.Single(original.Document.Notes).Note);
+    }
+
+    [Fact]
     public void UndoRestoresRemovedTrackIdentityNotesAndOriginalFileIndex()
     {
         var editor = Open(

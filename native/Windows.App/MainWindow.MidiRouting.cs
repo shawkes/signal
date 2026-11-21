@@ -16,6 +16,28 @@ public sealed partial class MainWindow
 
     private bool MultiMidiRouting => MidiRoutingBox.SelectedIndex == 1;
 
+    private void PreviewEditedNote(SongNote note) => PlayNotePreview(note, audition: false);
+
+    private void AuditionKey(SongNote note) => PlayNotePreview(note, audition: true);
+
+    private void PlayNotePreview(SongNote note, bool audition)
+    {
+        if (CaptureInProgress || _loadingBank || _bank is not { } bank || _engine is not { } engine)
+            return;
+
+        var synth = new SoundFontPiano(bank, engine.SampleRate, generalMidi: true);
+        var sound = _trackEditor.GetChannelSound(note.Channel);
+        int baseBank = note.Channel == SongTrackEditor.DrumChannel ? 128 : 0;
+        synth.ProcessMidi((byte)(0xb0 | note.Channel), 0, (byte)(sound.Bank - baseBank));
+        synth.ProcessMidi((byte)(0xc0 | note.Channel), sound.Program, 0);
+        var volume = _trackEditor.GetOpeningControlValue(note.Channel, ChannelControl.Volume);
+        synth.ProcessMidi((byte)(0xb0 | note.Channel), (byte)ChannelControl.Volume,
+            audition && volume == 0 ? SongTrackEditor.DefaultControlValue(ChannelControl.Volume) : volume);
+        synth.ProcessMidi((byte)(0xb0 | note.Channel), (byte)ChannelControl.Pan,
+            _trackEditor.GetOpeningControlValue(note.Channel, ChannelControl.Pan));
+        engine.PreviewNote(note, synth);
+    }
+
     private void MidiRoutingChanged(object sender, SelectionChangedEventArgs args)
     {
         if (_engine is { } engine && !CaptureInProgress)
@@ -86,13 +108,18 @@ public sealed partial class MainWindow
 
     private SongChannelMessage[] CreateLiveSetup()
     {
-        var messages = new SongChannelMessage[MidiChannelCount * 2];
+        var messages = new SongChannelMessage[MidiChannelCount * 4];
         for (byte channel = 0; channel < MidiChannelCount; channel++)
         {
             var sound = _trackEditor.GetChannelSound(channel);
             int baseBank = channel == SongTrackEditor.DrumChannel ? 128 : 0;
-            messages[channel * 2] = new(0, (byte)(0xB0 | channel), 0, (byte)(sound.Bank - baseBank));
-            messages[channel * 2 + 1] = new(0, (byte)(0xC0 | channel), sound.Program, 0);
+            int index = channel * 4;
+            messages[index] = new(0, (byte)(0xB0 | channel), 0, (byte)(sound.Bank - baseBank));
+            messages[index + 1] = new(0, (byte)(0xC0 | channel), sound.Program, 0);
+            messages[index + 2] = new(0, (byte)(0xB0 | channel), (byte)ChannelControl.Volume,
+                _trackEditor.GetOpeningControlValue(channel, ChannelControl.Volume));
+            messages[index + 3] = new(0, (byte)(0xB0 | channel), (byte)ChannelControl.Pan,
+                _trackEditor.GetOpeningControlValue(channel, ChannelControl.Pan));
         }
         return messages;
     }

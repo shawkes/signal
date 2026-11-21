@@ -55,7 +55,7 @@ public sealed partial class MainWindow
             ? _recordingLoop is { } loop ? $"Loop {BeatLabel(loop.StartTick)}–{BeatLabel(loop.EndTick)}" : "Recording from bar 1"
             : _loopRange is { } selected
             ? $"Range {BeatLabel(selected.StartTick)}–{BeatLabel(selected.EndTick)}"
-            : _loopEnabled ? "Repeating the whole song" : "Drag the ruler to set a loop range";
+            : _loopEnabled ? "Repeating the whole song" : "Right-click the Bars ruler for loop markers";
     }
 
     private string BeatLabel(long tick)

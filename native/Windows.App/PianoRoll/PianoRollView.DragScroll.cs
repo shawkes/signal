@@ -21,7 +21,7 @@ public sealed partial class PianoRollView
                     EditorScroll.VerticalOffset, EditorScroll.ScrollableHeight);
             return (horizontal, vertical);
         }
-        if (_rulerPointerId is not null && _loopPreview is not null)
+        if (_rulerPointerId is not null && (_loopPreview.HasValue || _rulerCuePreview.HasValue))
             return (EdgeDirection(_rulerPointerX, EditorScroll.ViewportWidth,
                 EditorScroll.HorizontalOffset, EditorScroll.ScrollableWidth), 0);
         return default;

@@ -1,5 +1,7 @@
+using System.ComponentModel;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Controls.Primitives;
 using Signal.Native.Engine;
 
 namespace Signal.Native.Windows.App;
@@ -25,13 +27,13 @@ public sealed partial class MainWindow
         if (selected < 0)
             selected = Math.Clamp(TrackList.SelectedIndex, 0, tracks.Count - 1);
 
-        var rows = tracks.Select((track, index) => new TrackRow(
+        var rows = tracks.Select((track, index) => new TrackRow(track,
             string.IsNullOrWhiteSpace(track.Name) ? $"Track {index + 1}" : track.Name,
-            ChannelLabel(track) + (track.IsMuted ? " · Muted" : "") + (track.IsSoloed ? " · Solo" : ""))).ToArray();
+            track.IsDrum ? "Channel 10 · Drums" : $"Channel {track.PrimaryChannel + 1}")).ToArray();
         _changingTrackList = true;
         try
         {
-            if (!_trackRows.SequenceEqual(rows))
+            if (!_trackRows.Select(row => (row.Track, row.Name)).SequenceEqual(rows.Select(row => (row.Track, row.Name))))
             {
                 _trackRows = rows;
                 TrackList.ItemsSource = rows;
@@ -95,8 +97,6 @@ public sealed partial class MainWindow
             return;
 
         TrackChannelText.Text = ChannelLabel(track);
-        MuteTrackButton.IsChecked = track.IsMuted;
-        SoloTrackButton.IsChecked = track.IsSoloed;
         TrackSoundBox.Header = track.IsDrum ? "Drum kit" : "Instrument";
         TrackSoundBox.PlaceholderText = _bank is null ? "Load a SoundFont" :
             track.IsDrum ? "No drum kits in this SoundFont" : "No instruments in this SoundFont";
@@ -137,6 +137,7 @@ public sealed partial class MainWindow
         bool shared = _trackEditor.SharesChannel(track);
         TrackChannelHint.Text = shared ? "Tracks sharing this MIDI channel also share its sound." : "";
         TrackChannelHint.Visibility = shared ? Visibility.Visible : Visibility.Collapsed;
+        RefreshChannelControls(track);
         UpdateTrackControls();
     }
 
@@ -163,6 +164,12 @@ public sealed partial class MainWindow
     }
 
     private void UndoTrackClicked(object sender, RoutedEventArgs args) => _trackEditor.UndoTrackEdit();
+
+    private void DuplicateTrackClicked(object sender, RoutedEventArgs args)
+    {
+        if (CanChangeTracks && sender is MenuFlyoutItem { Tag: EditableSongTrack track })
+            SelectTrack(_trackEditor.DuplicateTrack(track));
+    }
 
     private async void RenameTrackClicked(object sender, RoutedEventArgs args)
     {
@@ -209,18 +216,31 @@ public sealed partial class MainWindow
         RenameTrackButton.IsEnabled = canChange && _selectedTrack is not null;
         RemoveTrackButton.IsEnabled = canChange && _selectedTrack is not null && _trackEditor.Tracks.Count > 1;
         TrackSoundBox.IsEnabled = canChange && !_loadingBank && _soundChoices.Length > 0;
-        MuteTrackButton.IsEnabled = CanSeek && _selectedTrack is not null;
-        SoloTrackButton.IsEnabled = MuteTrackButton.IsEnabled;
+        TrackControlsButton.IsEnabled = CanSeek;
+        UpdateTrackMixRows();
     }
 
-    private void TrackMixClicked(object sender, RoutedEventArgs args)
+    private void MuteTrackClicked(object sender, RoutedEventArgs args) => SetTrackMix((ToggleButton)sender, mute: true);
+
+    private void SoloTrackClicked(object sender, RoutedEventArgs args) => SetTrackMix((ToggleButton)sender, mute: false);
+
+    private void UpdateTrackMixRows()
     {
-        if (!CanSeek || _selectedTrack is not { } track)
+        bool anySolo = _trackRows.Any(row => row.Track.IsSoloed);
+        foreach (var row in _trackRows)
+            row.UpdateMix(anySolo, CanSeek);
+    }
+
+    private void SetTrackMix(ToggleButton button, bool mute)
+    {
+        if (!CanSeek || button.Tag is not EditableSongTrack track || FindTrackIndex(track) < 0)
             return;
 
-        track.IsMuted = MuteTrackButton.IsChecked == true;
-        track.IsSoloed = SoloTrackButton.IsChecked == true;
-        RefreshTrackPanel(track);
+        if (mute)
+            track.IsMuted = button.IsChecked == true;
+        else
+            track.IsSoloed = button.IsChecked == true;
+        UpdateTrackMixRows();
         if (_engine is { PlaybackTick: long tick } engine && _bank is not null)
             StartSongPlayback(engine, tick, seek: true, refreshMix: true);
     }
@@ -231,4 +251,31 @@ public sealed partial class MainWindow
     private readonly record struct SoundChoice(TrackSound Sound, string Label);
 }
 
-public sealed record TrackRow(string Name, string Detail);
+public sealed class TrackRow(EditableSongTrack track, string name, string channel) : INotifyPropertyChanged
+{
+    public EditableSongTrack Track { get; } = track;
+    public string Name { get; } = name;
+    public string MuteLabel => $"Mute {Name}";
+    public string SoloLabel => $"Solo {Name}";
+    public string Detail { get; private set; } = "";
+    public bool IsMuted { get; private set; }
+    public bool IsSoloed { get; private set; }
+    public bool CanMix { get; private set; }
+    public event PropertyChangedEventHandler? PropertyChanged;
+
+    internal void UpdateMix(bool anySolo, bool canMix)
+    {
+        bool muted = Track.IsMuted;
+        bool soloed = Track.IsSoloed;
+        string state = muted ? "Muted" : anySolo && !soloed ? "Silenced" : soloed ? "Solo" : "Audible";
+        string detail = $"{state} · {channel}";
+        if (Detail == detail && IsMuted == muted && IsSoloed == soloed && CanMix == canMix)
+            return;
+
+        Detail = detail;
+        IsMuted = muted;
+        IsSoloed = soloed;
+        CanMix = canMix;
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(string.Empty));
+    }
+}

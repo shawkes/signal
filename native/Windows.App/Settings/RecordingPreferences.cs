@@ -46,6 +46,26 @@ internal sealed class RecordingPreferences(string directory)
     public void SaveMidiInput(MidiInputPreference? value) => Write(MidiInputFile, value);
     public void SaveQuantizationDivision(int value) => Write(QuantizationFile, value);
 
+    public string ReadPickerFolder(PickerFolder kind)
+    {
+        var folder = Read<string>($"{kind}-folder.json");
+        return Directory.Exists(folder) ? folder! : "";
+    }
+
+    public void RememberPickerFolder(PickerFolder kind, string path)
+    {
+        if (Path.GetDirectoryName(path) is not { Length: > 0 } folder)
+            return;
+        try
+        {
+            Write($"{kind}-folder.json", folder);
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            // Folder history should never interrupt a successful file operation.
+        }
+    }
+
     private T? Read<T>(string name)
     {
         try
@@ -77,3 +97,5 @@ internal sealed class RecordingPreferences(string directory)
         }
     }
 }
+
+internal enum PickerFolder { OpenMidi, SaveMidi, ExportAudio }

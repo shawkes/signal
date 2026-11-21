@@ -12,13 +12,19 @@ dotnet test native/Signal.Native.slnx -c Release
 dotnet run --project native/Windows.App -c Release
 ```
 
+### Release TODO
+
+- After initial CI/CD is working, fetch or build LAME in GitHub Actions. Download or compile `libmp3lame` during the release build, package it next to the app in the ZIP and installer, and include the LAME license notice and a link to the matching source archive in the release.
+
 ### Open, edit, and play a MIDI file
 
 - **File → New** (Ctrl+N) starts an untitled song with one piano track. **File → Open MIDI…** (Ctrl+O) opens a `.mid` or `.midi` file. Both commands offer to save a modified song first. Select a track in **Tracks** to edit it. **File → Save** (Ctrl+S) writes the song and **Save as…** (Ctrl+Shift+S) writes a copy.
 - Click an empty grid cell or select **Add note** to add a note. Drag from empty space to select a group, Ctrl-click to toggle individual notes, or press Ctrl+A to select the track's notes. Drag a selected note to move the group or drag its right edge to resize the group. Hold the pointer near the edge of the roll during a drag to scroll and keep editing.
 - Set **Grid** to 1/4, 1/8, 1/16, 1/32, or 1/64. Left and Right nudge selected notes by one grid step and Up and Down move them by one semitone. Ctrl+Shift+Left/Right changes selected lengths by one grid step. The ruler groups beats by the song’s time signature.
 - Use **Cut**, **Copy**, and **Paste** on the piano-roll toolbar or press Ctrl+X, Ctrl+C, and Ctrl+V. Shift-click an empty cell to set the paste position. The piano-roll clipboard also works across tracks. **Undo** or Ctrl+Z reverses a group edit in one step.
-- Click the piano-roll ruler to place the playhead on the editing grid. Drag the ruler to set a loop range. **Play song** starts from the playhead using the file's tempo map. Press **Space** to play, pause, or resume. **Stop** and **Home** return to bar 1. The jump-to-start button also works while idle. Left/Right step to a beat boundary and Shift+Left/Right step to a bar boundary. Use Ctrl+Left/Right to step by beat with notes selected. Edits made during playback take effect the next time you start playback.
+- Click or drag in the **Bars** ruler to place the playhead on the editing grid. **Play song** starts from the playhead using the file's tempo map. Press **Space** to play, pause, or resume. **Stop** and **Home** return to bar 1. The jump-to-start button also works while idle. Left/Right step to a beat boundary and Shift+Left/Right step to a bar boundary. Use Ctrl+Left/Right to step by beat with notes selected. Note edits made during playback take effect the next time you start playback.
+- Select notes and choose **Velocity** to set an exact value or adjust the selection by an offset. **Show velocity lane** displays their values at a glance and highlights the note under the pointer.
+- Use **File → Export → Ogg…** to choose the nominal bitrate and sample rate and render the song with the current SoundFont and mute and solo settings.
 - Finish a **Record test** take in **Recording settings** and select **Show in piano roll**. The test take appends as one undoable edit at the next available bar in the track selected when recording began.
 
 To open a file at launch, run `dotnet run --project native/Windows.App -c Release -- "C:/Music/example.mid"`.
@@ -29,12 +35,13 @@ The adapter supports MIDI formats 0 and 1 with PPQ timing. Convert SMPTE-timed f
 
 - Use **Add instrument** to assign an available melodic MIDI channel, or **Add drums** to create a percussion track on channel 10. Drum tracks show General MIDI labels such as kick, snare, and hi-hat in the piano roll.
 - Select a track and choose an **Instrument** or **Drum kit** from the loaded SoundFont. The picker sets the starting bank and program for the displayed MIDI channel and keeps later program changes. Tracks on a shared channel use the same starting sound. Start playback again to hear the change.
+- Open **Channel controls…** for opening volume and pan. **Show lane** displays either control over time. Click the lane to add a point, drag it to adjust its time and value, or use **Points…** to edit values and remove points. Tracks sharing a MIDI channel share these controls.
 - **Rename…** and **Remove track** operate on the selected track. **Undo track edit** reverses track and sound changes. The piano roll's **Undo** still applies to note edits in the current track. A song keeps at least one track.
 - MIDI save writes the track list, names, bank/program assignments, and notes. A one-track file saves as format 0 and a song with multiple tracks saves as format 1. Removing a track that carried tempo or meter events preserves those song-wide events. The SF2 file itself stays separate from the MIDI file.
 
 ### Loop playback
 
-- Drag across the piano-roll ruler to mark a range. The endpoints snap to beats and can be dragged to adjust the selection.
+- Right-click the **Bars** ruler and choose **Set loop in** or **Set loop out**. Drag the resulting handles at the bottom of the ruler to adjust the range. The endpoints snap to beats.
 - Turn on **Loop**, then select **Play song**. All tracks repeat the highlighted range. With no selection, **Loop** repeats the whole song. **Clear range** returns to whole-song looping.
 - The loop can be changed during playback. Enabling a range while the playhead is outside it jumps to the range start. Turning **Loop** off lets playback continue from the current position to the end of the song. The range stays selected for the next play.
 - Turn on **Metronome** in the piano-roll transport to hear the song's beat grid during playback and recording. The transport click goes quiet when playback or recording stops. The click and notes follow the same tempo map at each loop boundary. Recording settings has a separate 120 BPM metronome for the recording and tap tests.

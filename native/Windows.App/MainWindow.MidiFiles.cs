@@ -4,6 +4,7 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.Windows.Storage.Pickers;
 using Signal.Native.Engine;
 using Signal.Native.MidiFiles;
+using Signal.Native.Windows.App.Settings;
 
 namespace Signal.Native.Windows.App;
 
@@ -60,6 +61,10 @@ public sealed partial class MainWindow
                     ? note.StartTick + 1
                     : note.StartTick + note.LengthTicks)
                 .DefaultIfEmpty().Max()));
+        long lastControlTick = _trackEditor.Tracks.SelectMany(track => track.PlaybackMessages)
+            .Select(message => message.Tick).DefaultIfEmpty().Max();
+        if (lastControlTick > 0)
+            trackEnd = Math.Max(trackEnd, long.CreateSaturating((Int128)lastControlTick + 1));
         _songEndTick = Song.IncludeTimingMarkers(trackEnd, _trackEditor.TempoMap, _trackEditor.MeterMap);
         RollView.SetTimelineEnd(_songEndTick);
         RollView.SetMeterMap(_trackEditor.MeterMap);
@@ -110,7 +115,11 @@ public sealed partial class MainWindow
             if (!await ConfirmReplaceSongAsync())
                 return;
 
-            var picker = new FileOpenPicker(AppWindow.Id) { SettingsIdentifier = "SignalMidiFiles" };
+            var picker = new FileOpenPicker(AppWindow.Id)
+            {
+                SettingsIdentifier = "SignalOpenMidi",
+                SuggestedFolder = _preferences.ReadPickerFolder(PickerFolder.OpenMidi)
+            };
             picker.FileTypeFilter.Add(".mid");
             picker.FileTypeFilter.Add(".midi");
             var file = await picker.PickSingleFileAsync();
@@ -134,6 +143,7 @@ public sealed partial class MainWindow
     {
         var document = await Task.Run(() => MidiFileDocument.Read(path));
         ReplaceSong(document.Song, document, path);
+        _preferences.RememberPickerFolder(PickerFolder.OpenMidi, path);
     }
 
     private async void SaveSongClicked(object sender, RoutedEventArgs args) => await SaveFromMenuAsync(saveAs: false);
@@ -164,7 +174,8 @@ public sealed partial class MainWindow
                 {
                     SuggestedFileName = Path.GetFileNameWithoutExtension(SongName),
                     DefaultFileExtension = ".mid",
-                    SettingsIdentifier = "SignalMidiFiles",
+                    SettingsIdentifier = "SignalSaveMidi",
+                    SuggestedFolder = _preferences.ReadPickerFolder(PickerFolder.SaveMidi),
                     ShowOverwritePrompt = true
                 };
                 picker.FileTypeChoices.Add("MIDI file", [".mid", ".midi"]);
@@ -186,6 +197,7 @@ public sealed partial class MainWindow
                     source.Write(path, song, sourceTrackIndices);
             });
             _songPath = path;
+            _preferences.RememberPickerFolder(PickerFolder.SaveMidi, path);
             _songSaveCount++;
             _trackEditor.MarkSaved();
             return true;
@@ -273,6 +285,7 @@ public sealed partial class MainWindow
         OpenSongButton.IsEnabled = ready;
         SaveSongButton.IsEnabled = ready;
         SaveSongAsButton.IsEnabled = ready;
+        ExportOggMenuItem.IsEnabled = CanExportOgg;
         TempoChangesButton.IsEnabled = ready;
         MeterButton.IsEnabled = ready;
         CropSongMenuItem.IsEnabled = ready && LastSongMeasure > 1;
