@@ -62,6 +62,7 @@ public sealed partial class PianoRollView
             || !RulerInput.CapturePointer(args.Pointer))
             return;
 
+        Focus(FocusState.Pointer);
         _rulerPointerId = args.Pointer.PointerId;
         _rulerPressX = _rulerPointerX = x;
         _rulerDrag = RulerDrag.New;

@@ -2,6 +2,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Shapes;
 using Signal.Native.Engine;
+using Windows.Foundation;
 
 namespace Signal.Native.Windows.App.PianoRoll;
 
@@ -10,12 +11,15 @@ public sealed partial class PianoRollView
     private PianoRollDocument? _recordingDocument;
     private long _takeExtentTick;
     private int _displayedNoteCount = -1;
+    private int _recordingPreviewCount;
+    private Rect? _recordingWindow;
+    private readonly HashSet<(long Start, long Length, byte Pitch)> _recordingPreviewNotes = [];
 
     private void RefreshNoteCount()
     {
         int count = _document?.Notes.Count ?? 0;
         if (_recordingDocument is not null && ReferenceEquals(_document, _recordingDocument))
-            count += RecordedLayer.Children.Count + HeldLayer.Children.Count;
+            count += _recordingPreviewCount + HeldLayer.Children.Count;
         if (count != _displayedNoteCount)
         {
             NoteCountText.Text = count == 1 ? "1 note" : $"{count} notes";
@@ -27,8 +31,12 @@ public sealed partial class PianoRollView
     {
         RecordedLayer.Children.Clear();
         HeldLayer.Children.Clear();
+        _recordingPreviewNotes.Clear();
+        _recordingPreviewCount = 0;
+        _recordingWindow = null;
         _recordingDocument = document;
         UpdateRecordingLayerVisibility();
+        RefreshViewport();
     }
 
     private void UpdateRecordingLayerVisibility()
@@ -43,9 +51,38 @@ public sealed partial class PianoRollView
         if (_recordingDocument is null)
             return;
 
-        var rect = CreateRecordingRectangle(RecordedLayer);
-        PositionRecordingRectangle(rect, note.StartTick, note.LengthTicks, note.NoteNumber);
+        _recordingPreviewCount++;
+        // Repeated overdubs can put many identical shapes on one drum lane. Draw it
+        // once while preserving every recorded note in the take and in the count.
+        if (_recordingPreviewNotes.Add((note.StartTick, note.LengthTicks, note.NoteNumber)) &&
+            _recordingWindow is { } window && NoteIsInWindow(window, note.StartTick, note.LengthTicks, note.NoteNumber))
+            PositionRecordingRectangle(CreateRecordingRectangle(RecordedLayer),
+                note.StartTick, note.LengthTicks, note.NoteNumber);
         ExtendTakeTimeline(note.StartTick + note.LengthTicks);
+    }
+
+    private void RefreshRecordingViewport(double left, double top, double width, double height)
+    {
+        if (_recordingDocument is null || (_recordingWindow is { } current && current.Left <= left &&
+            current.Right >= left + width && current.Top <= top && current.Bottom >= top + height))
+            return;
+
+        double firstColumn = Math.Max(0, left - width);
+        double firstRow = Math.Max(0, top - RowHeight * 2);
+        var window = new Rect(firstColumn, firstRow, left + width * 2 - firstColumn, top + height + RowHeight * 2 - firstRow);
+        _recordingWindow = window;
+        int used = 0;
+        foreach (var (start, length, pitch) in _recordingPreviewNotes)
+        {
+            if (!NoteIsInWindow(window, start, length, pitch))
+                continue;
+            var rect = used < RecordedLayer.Children.Count ? (Rectangle)RecordedLayer.Children[used] :
+                CreateRecordingRectangle(RecordedLayer);
+            PositionRecordingRectangle(rect, start, length, pitch);
+            used++;
+        }
+        while (RecordedLayer.Children.Count > used)
+            RecordedLayer.Children.RemoveAt(RecordedLayer.Children.Count - 1);
     }
 
     public void SetHeldRecordingNotes(ReadOnlySpan<HeldRecordingNote> held)
@@ -70,6 +107,9 @@ public sealed partial class PianoRollView
         _recordingDocument = null;
         RecordedLayer.Children.Clear();
         HeldLayer.Children.Clear();
+        _recordingPreviewNotes.Clear();
+        _recordingPreviewCount = 0;
+        _recordingWindow = null;
         UpdateRecordingLayerVisibility();
         // Keep the visible part of a long take available if recording stopped during a rest.
         long visibleEnd = long.CreateSaturating(Math.Ceiling(

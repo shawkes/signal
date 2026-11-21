@@ -53,6 +53,9 @@ public sealed partial class MainWindow : Window
         _savedRecordingOffset = _preferences.ReadOffset();
         if (_savedRecordingOffset is { } offset)
             OffsetBox.Value = offset;
+        QuantizeBox.ItemsSource = RecordingDivisions.Select(division => division == 0 ? "Off" : $"1/{division}").ToArray();
+        QuantizeBox.SelectedIndex = Math.Max(0, Array.IndexOf(RecordingDivisions, _preferences.ReadQuantizationDivision() ?? 0));
+        QuantizeBox.SelectionChanged += RecordingQuantizeChanged;
         _preferredMidiInput = _preferences.ReadMidiInput();
         _startupMidiPath = startupMidiPath;
         AppWindow.Resize(new SizeInt32(1200, 780));
@@ -74,6 +77,11 @@ public sealed partial class MainWindow : Window
     private async void OnLoaded(object sender, RoutedEventArgs args)
     {
         WorkspaceTabs.Loaded -= OnLoaded;
+        DispatcherQueue.TryEnqueue(DispatcherQueuePriority.Low, () =>
+        {
+            if (RollView.IsLoaded && ReferenceEquals(WorkspaceTabs.SelectedItem, PianoRollTab))
+                RollView.Focus(FocusState.Programmatic);
+        });
         RefreshDevices();
         OpenAudio();
         OpenMidi();
@@ -194,8 +202,7 @@ public sealed partial class MainWindow : Window
                 renderer!.Render(samples, firstFrame, new AudioClockAnchor(timestamp, firstFrame), Stopwatch.GetTimestamp()), preference);
             renderer = new LatencyEngine(candidate.SampleRate, SilentMonitorSynth.Instance)
             {
-                MetronomeEnabled = SongMetronomeButton.IsChecked == true,
-                PreviewMetronomeEnabled = SettingsMetronomeIsActive
+                MetronomeEnabled = SongMetronomeButton.IsChecked == true
             };
             ConfigureLiveMidi(renderer);
             candidate.Start();
@@ -350,26 +357,6 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private void MetronomeToggled(object sender, RoutedEventArgs args)
-    {
-        bool enabled = MetronomeSwitch.IsOn;
-        if (!enabled && _recording && _capturePurpose == CapturePurpose.PlacementTest)
-            _placementClickContinuous = false;
-        UpdateSettingsMetronome();
-    }
-
-    private bool SettingsMetronomeIsActive => MetronomeSwitch.IsOn &&
-        (ReferenceEquals(WorkspaceTabs.SelectedItem, RecordingSettingsTab) ||
-            (_recording && _capturePurpose != CapturePurpose.Song));
-
-    private void WorkspaceTabChanged(object sender, SelectionChangedEventArgs args) => UpdateSettingsMetronome();
-
-    private void UpdateSettingsMetronome()
-    {
-        if (_engine is { } engine)
-            engine.PreviewMetronomeEnabled = SettingsMetronomeIsActive;
-    }
-
     private void SongMetronomeClicked(object sender, RoutedEventArgs args)
     {
         if (_engine is { } engine)
@@ -408,9 +395,11 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private void PlayClicked(object sender, RoutedEventArgs args)
+    private void PlayClicked(object sender, RoutedEventArgs args) => ToggleSongPlayback();
+
+    private void ToggleSongPlayback()
     {
-        if (_engine is not { } engine || _bank is null || CaptureInProgress || _fileBusy)
+        if (!PlayButton.IsEnabled || _engine is not { } engine || _bank is null || !CanSeek)
             return;
 
         if (engine.PlaybackTick is { } tick)
@@ -439,7 +428,7 @@ public sealed partial class MainWindow : Window
             _playingSong = song;
             _playingSongEndTick = endTick;
             _playbackError = null;
-            UpdatePlayhead();
+            UpdatePlayhead(reveal: seek);
             WatchTransportFrames(true);
         }
         catch (Exception error) when (error is ArgumentException or InvalidOperationException or OverflowException)
@@ -452,20 +441,22 @@ public sealed partial class MainWindow : Window
     private long _cueTick;
     private long? _pausedTick;
     private Song? _playingSong;
+    private bool CanSeek => !CaptureInProgress && !_fileBusy;
 
     private void SeekPlayhead(long tick)
     {
-        if (CaptureInProgress || _fileBusy)
+        if (!CanSeek)
             return;
 
-        _cueTick = Math.Min(tick, _songEndTick);
-        if (_engine is { PlaybackTick: not null } engine && _bank is not null)
-            StartSongPlayback(engine, _cueTick, seek: true);
+        var playingEngine = _engine is { PlaybackTick: not null } engine && _bank is not null ? engine : null;
+        _cueTick = Math.Clamp(tick, 0, playingEngine is null ? _songEndTick : _playingSongEndTick);
+        if (playingEngine is not null)
+            StartSongPlayback(playingEngine, _cueTick, seek: true);
         else
         {
             if (_pausedTick.HasValue)
                 _pausedTick = _cueTick;
-            UpdatePlayhead();
+            UpdatePlayhead(reveal: true);
         }
     }
 
@@ -473,16 +464,28 @@ public sealed partial class MainWindow : Window
     {
         if (SongCaptureInProgress && _engine is { } engine)
             StopTake(engine);
-        else
-            StopSongPlayback();
+        else if (CanSeek)
+            RewindSong();
     }
 
-    private void StopSongPlayback()
+    private void JumpToStartClicked(object sender, RoutedEventArgs args)
+    {
+        if (CanSeek)
+            RewindSong();
+    }
+
+    private void RewindSong()
+    {
+        _cueTick = 0;
+        StopSongPlayback(reveal: true);
+    }
+
+    private void StopSongPlayback(bool reveal = false)
     {
         _pausedTick = null;
         _playingSong = null;
         _engine?.StopPlayback();
-        UpdatePlayhead();
+        UpdatePlayhead(reveal);
         if (_trackEditor is not null)
             UpdatePlaybackControls();
     }
@@ -500,7 +503,7 @@ public sealed partial class MainWindow : Window
 
     private void OnTransportFrame(object? sender, object args) => UpdatePlayhead();
 
-    private void UpdatePlayhead()
+    private void UpdatePlayhead(bool reveal = false)
     {
         long? tick;
         int? countIn = null;
@@ -525,7 +528,7 @@ public sealed partial class MainWindow : Window
         {
             tick = _audioFailed ? null : _engine?.PlaybackTick;
         }
-        RollView.SetPlayhead(SongCaptureInProgress ? tick : tick ?? _pausedTick ?? _cueTick);
+        RollView.SetPlayhead(SongCaptureInProgress ? tick : tick ?? _pausedTick ?? _cueTick, reveal);
         if (_trackEditor is not null)
             UpdateMeterButton(tick);
         if (tick is null && !SongCaptureInProgress)
@@ -671,7 +674,7 @@ public sealed partial class MainWindow : Window
         bool placementTest = _recording && _capturePurpose == CapturePurpose.PlacementTest;
         SoundFontButton.IsEnabled = !_loadingBank && !takeInProgress;
         TestNoteButton.IsEnabled = pianoReady && !_testNoteHeld && !takeInProgress;
-        MetronomeSwitch.IsEnabled = audioReady && !CalibrationInProgress;
+        TestMetronomeBox.IsEnabled = audioReady && !takeInProgress;
         SongMetronomeButton.IsEnabled = audioReady && !CalibrationInProgress;
         RecordButton.IsEnabled = audioReady && !_fileBusy && (!takeInProgress || placementTest);
         RecordButton.Content = placementTest ? "Stop recording" : "Record test";
@@ -699,13 +702,14 @@ public sealed partial class MainWindow : Window
         PlayIcon.Symbol = playingSong ? Symbol.Pause : Symbol.Play;
         PlayLabel.Text = playingSong ? "Pause" : _pausedTick.HasValue ? "Resume" : "Play song";
         AutomationProperties.SetName(PlayButton, PlayLabel.Text);
-        ToolTipService.SetToolTip(PlayButton, playingSong ? "Pause at the current playhead" : "Play all tracks from the playhead");
+        ToolTipService.SetToolTip(PlayButton, playingSong ? "Pause (Space)" : "Play all tracks from the playhead (Space)");
         PlayButton.IsEnabled = audioReady && _bank is not null && !takeInProgress && !_fileBusy &&
             (playingSong || _trackEditor.Tracks.Any(track => track.Document.Notes.Count > 0));
         SongRecordButton.IsEnabled = audioReady && _bank is not null && _selectedTrack is not null &&
             !_loadingBank && !_playing && !takeInProgress && !_fileBusy;
         CountInBox.IsEnabled = !takeInProgress && !_fileBusy;
         StopButton.IsEnabled = audioReady && (_playing || _pausedTick.HasValue || (SongCaptureInProgress && _recording)) && !_finishingTake;
+        JumpToStartButton.IsEnabled = CanSeek;
         LoopButton.IsEnabled = !_fileBusy && !takeInProgress;
         ClearLoopRangeButton.IsEnabled = !_fileBusy && !takeInProgress;
         RollView.SetLoopRangeEditable(!takeInProgress);

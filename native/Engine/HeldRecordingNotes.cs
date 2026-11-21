@@ -6,7 +6,8 @@ public readonly record struct HeldRecordingNote(byte Channel, byte NoteNumber, i
     public int DestinationTrack { get; init; } = -1;
 }
 
-internal readonly record struct RecordingPlacement(TempoMap Tempo, int SampleRate, long OffsetFrames, int Division)
+internal readonly record struct RecordingPlacement(
+    TempoMap Tempo, int SampleRate, long OffsetFrames, int Division, bool CountIn = false)
 {
     private const int UnquantizedPickupMilliseconds = 25;
     private readonly double _gridTicks = Division == 0 ? 0 : Math.Max(1, 4.0 * Tempo.TicksPerQuarter / Division);
@@ -16,7 +17,7 @@ internal readonly record struct RecordingPlacement(TempoMap Tempo, int SampleRat
         // A hit up to half a grid cell early still snaps to the downbeat.
         long earlyFrames = Division == 0
             ? (long)SampleRate * UnquantizedPickupMilliseconds / 1000
-            : (long)Math.Floor(Math.BitIncrement(_gridTicks * 0.5 * Tempo.SecondsPerTickAt(startTick) * SampleRate));
+            : (long)Math.Floor(Math.BitIncrement(HalfGridFrames(startTick)));
         // Always accept attacks on or after the downbeat, whatever the compensation setting.
         return long.CreateSaturating(Int128.Min(downbeatFrame, (Int128)downbeatFrame + OffsetFrames - earlyFrames));
     }
@@ -24,7 +25,23 @@ internal readonly record struct RecordingPlacement(TempoMap Tempo, int SampleRat
     public long TickAt(long frame) =>
         (long)Math.Round(Tempo.SampleToTick(frame, SampleRate), MidpointRounding.AwayFromZero);
 
-    public long StartTick(long sourceFrame) => SnapTick(Tempo.SampleToTick(sourceFrame - OffsetFrames, SampleRate));
+    public long StartTick(long sourceFrame) => KeepOpeningPickup(sourceFrame, 0)
+        ? 0 : SnapTick(Tempo.SampleToTick(sourceFrame - OffsetFrames, SampleRate));
+
+    // A pickup already aimed at the audible downbeat should survive a one-cell shift
+    // from compensation measured later in the performance.
+    public bool KeepOpeningPickup(long elapsedFrame, long startTick)
+    {
+        if (!CountIn || Division == 0 || OffsetFrames >= 0 || elapsedFrame > 0)
+            return false;
+
+        double halfGrid = HalfGridFrames(startTick);
+        double adjusted = (double)elapsedFrame - OffsetFrames;
+        return elapsedFrame >= -halfGrid && adjusted >= halfGrid && adjusted < 3 * halfGrid;
+    }
+
+    private double HalfGridFrames(long startTick) =>
+        _gridTicks * 0.5 * Tempo.SecondsPerTickAt(startTick) * SampleRate;
 
     public long SnapTick(double tick)
     {
@@ -43,7 +60,7 @@ internal readonly record struct RecordingLoop(LoopRange Range, long StartFrame, 
     public (long Tick, long CompensatedSource, long Pass) Place(RecordingPlacement placement, long elapsed)
     {
         Int128 compensated = (Int128)elapsed - placement.OffsetFrames;
-        if (compensated < 0)
+        if (compensated < 0 || (compensated < FrameCount && placement.KeepOpeningPickup(elapsed, Range.StartTick)))
             return (Range.StartTick, long.CreateSaturating(StartFrame + compensated), 0);
 
         long pass = long.CreateSaturating(compensated / FrameCount);

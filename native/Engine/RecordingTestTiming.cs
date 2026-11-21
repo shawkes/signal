@@ -10,7 +10,19 @@ public sealed record RecordingTestResult(
     double? P95MonitorDelayMilliseconds)
 {
     /// <summary>Signed total recording offset estimated from notes played one per click.</summary>
-    public double? SuggestedOffsetMilliseconds { get; init; }
+    public double? SuggestedOffsetMilliseconds => TapAnalysis?.SuggestedOffsetMilliseconds;
+
+    public RecordingTestTapAnalysis? TapAnalysis { get; init; }
+}
+
+public sealed record RecordingTestTapAnalysis(
+    int BeatsWithInput,
+    int UsableTaps,
+    int AgreeingTaps,
+    int RequiredAgreeingTaps,
+    double? SuggestedOffsetMilliseconds)
+{
+    public bool UsedRecentBeats { get; init; }
 }
 
 /// <summary>Collects completed placement-test notes on the UI thread for one end-of-take summary.</summary>
@@ -60,24 +72,37 @@ public sealed class RecordingTestTiming
             medianDelay,
             p95Delay)
         {
-            SuggestedOffsetMilliseconds = playedWithClick ? EstimateRecordingOffset() : null
+            TapAnalysis = playedWithClick ? AnalyzeTaps() : null
         };
     }
 
-    private double? EstimateRecordingOffset()
+    private RecordingTestTapAnalysis AnalyzeTaps()
     {
-        if (_singleTapByBeat.Count < TapTimingTest.MinimumTaps)
-            return null;
+        var take = AnalyzeTaps(_singleTapByBeat.Values, _singleTapByBeat.Count);
+        if (take.SuggestedOffsetMilliseconds.HasValue || take.UsableTaps < TapTimingTest.MinimumTaps ||
+            take.BeatsWithInput <= TapTimingTest.TargetTaps)
+            return take;
 
-        var taps = _singleTapByBeat.Values.Where(value => value.HasValue).Select(value => value.GetValueOrDefault()).ToArray();
+        // Use beat order because held notes can finish out of order. Only the end of the
+        // take is eligible as a fallback, so an earlier steady passage cannot mask a variable ending.
+        var recentBeats = _singleTapByBeat.OrderByDescending(beat => beat.Key)
+            .Take(TapTimingTest.TargetTaps).Select(beat => beat.Value);
+        var recent = AnalyzeTaps(recentBeats, TapTimingTest.TargetTaps);
+        return recent.SuggestedOffsetMilliseconds.HasValue ? recent with { UsedRecentBeats = true } : take;
+    }
+
+    private static RecordingTestTapAnalysis AnalyzeTaps(IEnumerable<double?> beats, int beatsWithInput)
+    {
+        var taps = beats.Where(value => value.HasValue).Select(value => value.GetValueOrDefault()).ToArray();
+        int required = (int)Math.Ceiling(beatsWithInput * 0.8);
         if (taps.Length < TapTimingTest.MinimumTaps)
-            return null;
+            return new RecordingTestTapAnalysis(beatsWithInput, taps.Length, 0, required, null);
 
         // Require four out of five occupied beats to be single, unambiguous taps near the
         // same offset. A chord occupies one beat regardless of how its notes are released.
         double median = TimingStatistics.SortAndGetMedian(taps);
         int agree = taps.Count(tap => Math.Abs(tap - median) <= AgreementWindowMilliseconds);
-        return agree >= Math.Ceiling(_singleTapByBeat.Count * 0.8) ? median : null;
+        return new RecordingTestTapAnalysis(beatsWithInput, taps.Length, agree, required, agree >= required ? median : null);
     }
 }
 

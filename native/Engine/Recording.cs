@@ -35,27 +35,32 @@ internal sealed class Recording(TempoMap tempoMap, int sampleRate)
     private readonly SingleConsumerRing<RecordedNote> _notes = new(NoteCapacity);
     private readonly TempoMap _defaultTempoMap = tempoMap;
     private RecordingPlacement _placement = new(tempoMap, sampleRate, 0, 0);
-    private long? _songOriginFrame;
+    private long? _timelineOriginFrame;
     private long _firstAcceptedFrame;
     private bool _pendingDownbeat;
     private HeldRecordingNotes? _preview;
+    private OpeningTimingBuffer? _openingTiming;
     private OverdubNoteReady? _noteReady;
     private long _takeId;
     private long _droppedNotes;
 
     public long DroppedNotes => Volatile.Read(ref _droppedNotes);
 
-    public void Start(long atFrame, long takeId, long offsetFrames, int quantizationDivision) =>
+    public void Start(long atFrame, long takeId, long offsetFrames, int quantizationDivision, long? clickOriginFrame)
+    {
         StartTake(atFrame, takeId, new(_defaultTempoMap, sampleRate, offsetFrames, quantizationDivision), null, null);
+        _timelineOriginFrame = clickOriginFrame;
+    }
 
     public void Start(long firstSongFrame, long armedFrame, bool countIn, long takeId,
-        HeldRecordingNotes preview, OverdubNoteReady? noteReady)
+        HeldRecordingNotes preview, OverdubNoteReady? noteReady, OpeningTimingBuffer openingTiming)
     {
         StartTake(firstSongFrame, takeId, preview.Placement, preview, noteReady);
         _firstAcceptedFrame = countIn
             ? Math.Max(armedFrame, _placement.EarliestDownbeatReceipt(firstSongFrame, preview.Loop?.Range.StartTick ?? 0))
             : armedFrame;
         _pendingDownbeat = countIn && _firstAcceptedFrame < firstSongFrame;
+        _openingTiming = openingTiming;
     }
 
     private void StartTake(long atFrame, long takeId, RecordingPlacement placement,
@@ -63,7 +68,7 @@ internal sealed class Recording(TempoMap tempoMap, int sampleRate)
     {
         Stop(atFrame);
         _placement = placement;
-        _songOriginFrame = preview is null ? null : atFrame;
+        _timelineOriginFrame = preview is null ? null : atFrame;
         _firstAcceptedFrame = long.MinValue;
         _preview = preview;
         _noteReady = noteReady;
@@ -75,7 +80,7 @@ internal sealed class Recording(TempoMap tempoMap, int sampleRate)
         _noteReady = null;
         // Canceling the count-in discards early complete and still-held notes, even when
         // their offset would have put them into the song.
-        if (_pendingDownbeat && frame >= _songOriginFrame)
+        if (_pendingDownbeat && frame >= _timelineOriginFrame)
             ReachDownbeat();
         FinishAll(frame);
         if (_pendingDownbeat)
@@ -83,6 +88,7 @@ internal sealed class Recording(TempoMap tempoMap, int sampleRate)
         _pendingDownbeat = false;
         _takeId = 0;
         _preview = null;
+        _openingTiming = null;
     }
 
     public void ReachDownbeat()
@@ -108,7 +114,21 @@ internal sealed class Recording(TempoMap tempoMap, int sampleRate)
 
     public void ProcessMidi(MidiMessage message, long frame, long synthFrame, int destinationTrack = -1)
     {
-        if (_takeId == 0 || frame < _firstAcceptedFrame)
+        if (_takeId == 0)
+            return;
+
+        if (_openingTiming is { } opening && (message.Status & 0xf0) == 0x90 && message.Data2 != 0)
+        {
+            long elapsed = frame - _timelineOriginFrame.GetValueOrDefault();
+            if (opening.Includes(elapsed))
+            {
+                long? tick = frame < _firstAcceptedFrame ? null :
+                    _preview?.Loop is { } loop ? loop.Place(_placement, elapsed).Tick : _placement.StartTick(elapsed);
+                opening.Add(message, elapsed, tick);
+            }
+        }
+
+        if (frame < _firstAcceptedFrame)
         {
             return;
         }
@@ -120,7 +140,7 @@ internal sealed class Recording(TempoMap tempoMap, int sampleRate)
             case 0x90 when message.Data2 != 0:
                 Finish(key, frame);
                 _held[key] = new HeldNote(frame, message.Data2, synthFrame, destinationTrack);
-                _preview?.Press(key, frame - _songOriginFrame.GetValueOrDefault(), destinationTrack);
+                _preview?.Press(key, frame - _timelineOriginFrame.GetValueOrDefault(), destinationTrack);
                 break;
             case 0x80:
             case 0x90:
@@ -156,14 +176,14 @@ internal sealed class Recording(TempoMap tempoMap, int sampleRate)
             return;
         }
 
-        bool onSongTimeline = _songOriginFrame.HasValue;
-        var relativeReceipt = held.ReceivedFrame - _songOriginFrame.GetValueOrDefault();
+        bool onSongTimeline = _preview is not null;
+        var relativeReceipt = held.ReceivedFrame - _timelineOriginFrame.GetValueOrDefault();
         var compensatedStart = relativeReceipt - _placement.OffsetFrames;
         var compensatedTick = _placement.Tempo.SampleToTick(compensatedStart, sampleRate);
         // A tempo change can fall inside the played interval. Measure its duration before moving the note.
         var durationStart = onSongTimeline ? relativeReceipt : compensatedStart;
         var lengthTicks = _placement.TickAt(durationStart + playedLengthFrames) - _placement.TickAt(durationStart);
-        var (beat, beatFrame) = NearestBeat(compensatedStart, compensatedTick, onSongTimeline);
+        var (beat, beatFrame) = NearestBeat(compensatedStart, compensatedTick, clampToSong: _timelineOriginFrame.HasValue);
 
         var note = new RecordedNote(
             _takeId, _placement.StartTick(relativeReceipt), lengthTicks,
@@ -182,7 +202,7 @@ internal sealed class Recording(TempoMap tempoMap, int sampleRate)
 
     private void FinishLooped(int key, HeldNote held, long lengthFrames, RecordingLoop loop)
     {
-        long capturedAttack = held.ReceivedFrame - _songOriginFrame.GetValueOrDefault();
+        long capturedAttack = held.ReceivedFrame - _timelineOriginFrame.GetValueOrDefault();
         long capturedRelease = capturedAttack + lengthFrames;
         long completedPass = Math.Max(0, capturedAttack + Math.Max(0, lengthFrames - 1)) / loop.FrameCount;
         var (sourceAttack, rawAttackTick, duration) = loop.Measure(_placement, capturedAttack, capturedRelease);

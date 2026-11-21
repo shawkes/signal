@@ -109,6 +109,84 @@ public sealed class FirstDownbeatTests
     }
 
     [Fact]
+    public void OpeningTimingDistinguishesARejectedPickupFromAnAttackSnappedLate()
+    {
+        long take = Start(countIn: true, offset: -90, division: 16);
+        Midi(340, 0x99, 36);
+        Midi(350, 0x89, 36);
+        Midi(510, 0x99, 42);
+        Midi(525, 0x89, 42);
+        Midi(910, 0x99, 42);
+        Midi(925, 0x89, 42);
+        Midi(1540, 0x99, 38);
+        Midi(1550, 0x89, 38);
+        Render(0, 1560);
+        Assert.Null(_engine.ReadOpeningRecordingTiming(take));
+        _engine.StopSongRecording(timestamp: Origin + 1560);
+        Render(1560, 10);
+
+        var timing = Assert.IsType<OpeningRecordingTiming>(_engine.ReadOpeningRecordingTiming(take));
+        Assert.Equal((-90d, 16, 500, true), (timing.OffsetMilliseconds, timing.QuantizationDivision, timing.TicksPerQuarter, timing.CountIn));
+        Assert.Equal(
+        [
+            new OpeningNoteTiming(9, 36, 100, -160, -70, null),
+            new OpeningNoteTiming(9, 42, 100, 10, 100, 125),
+            new OpeningNoteTiming(9, 42, 100, 410, 500, 500)
+        ], timing.Notes);
+
+        Assert.True(_engine.TryReadNote(out var opening));
+        Assert.Equal(125, opening.StartTick);
+        Assert.True(_engine.TryReadNote(out var later));
+        Assert.Equal(500, later.StartTick);
+        Assert.True(_engine.TryReadNote(out var outsideReport));
+        Assert.Equal(38, outsideReport.NoteNumber);
+        Assert.False(_engine.TryReadNote(out _));
+    }
+
+    [Fact]
+    public void KeepsTheReportedDrumTakeOnBeatOneWithoutMovingTheLaterHits()
+    {
+        const int sampleRate = 48_000;
+        const long start = 10_000;
+        long downbeat = start + 2 * sampleRate;
+        var engine = new LatencyEngine(sampleRate, SilentMonitorSynth.Instance, timestampFrequency: sampleRate);
+        var song = new Song(TempoMap.Constant(120), []);
+        long take = engine.RecordSong(song, SilentMonitorSynth.Instance, countIn: true,
+            offsetMilliseconds: -90, quantizationDivision: 16, timestamp: start);
+        (double ReceiptMs, byte Pitch, long Tick)[] hits =
+        [
+            (-23.958, 36, 0), (-14.958, 42, 0), (192.063, 42, 240), (451.500, 42, 480),
+            (455.479, 40, 480), (687.500, 42, 720), (926.646, 42, 960), (938.063, 36, 960),
+            (1156.042, 42, 1200), (1408.625, 42, 1440), (1424.063, 40, 1440), (1651.042, 42, 1680),
+            (1905.521, 42, 1920), (1915.625, 36, 1920), (2134.479, 42, 2160), (2375.521, 42, 2400),
+            (2396.042, 40, 2400), (2623.479, 42, 2640), (2867.646, 42, 2880), (2878.063, 36, 2880),
+            (3115.063, 42, 3120), (3367.375, 42, 3360), (3380.479, 40, 3360), (3612.958, 42, 3600),
+            (3877.083, 36, 3840), (3884.500, 42, 3840)
+        ];
+        foreach (var (receipt, pitch, _) in hits)
+        {
+            long at = downbeat + (long)Math.Round(receipt * sampleRate / 1000);
+            Assert.True(engine.TryEnqueue(new MidiMessage(at, 0x99, pitch, 100)));
+            Assert.True(engine.TryEnqueue(new MidiMessage(at + 1200, 0x89, pitch, 0)));
+        }
+        long stop = downbeat + 4 * sampleRate;
+        engine.StopSongRecording(timestamp: stop);
+        var audio = new float[960];
+        for (long frame = start; frame <= stop; frame += 480)
+            engine.Render(audio, frame, new(frame, frame), callbackTimestamp: frame - 576);
+
+        foreach (var (_, pitch, tick) in hits)
+        {
+            Assert.True(engine.TryReadNote(out var note));
+            Assert.Equal((pitch, tick, 24L), (note.NoteNumber, note.StartTick, note.LengthTicks));
+        }
+        Assert.False(engine.TryReadNote(out _));
+        var timing = Assert.IsType<OpeningRecordingTiming>(engine.ReadOpeningRecordingTiming(take));
+        Assert.Equal(0L, timing.Notes[0].PlacedTick);
+        Assert.Equal(0L, timing.Notes[1].PlacedTick);
+    }
+
+    [Fact]
     public void CancelInLastPartOfCountInDiscardsCompletedAndHeldOpeningNotes()
     {
         long take = Start(countIn: true);

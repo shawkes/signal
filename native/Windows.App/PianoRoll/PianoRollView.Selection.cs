@@ -20,11 +20,15 @@ public sealed partial class PianoRollView
     private Point _editPointer;
     private bool _editDragStarted;
 
+    internal bool HasNoteSelection => _selectedIds.Count > 0;
+    internal bool HasActiveGesture => _pointerId is not null || _rulerPointerId is not null ||
+        _tempoPointerId is not null || _tempoMarkerFlyout is not null;
+
     private void RefreshSelection()
     {
         RefreshNoteCount();
         AddButton.IsEnabled = _editingEnabled && _document is not null;
-        CopyButton.IsEnabled = DeleteButton.IsEnabled = _editingEnabled && _selectedIds.Count > 0;
+        CutButton.IsEnabled = CopyButton.IsEnabled = DeleteButton.IsEnabled = _editingEnabled && _selectedIds.Count > 0;
         PasteButton.IsEnabled = CanPaste;
         UndoButton.IsEnabled = _editingEnabled && _document?.CanUndo is true;
         GridSizeBox.IsEnabled = _editingEnabled;
@@ -51,12 +55,10 @@ public sealed partial class PianoRollView
 
     private void SetSelection(HashSet<long> ids)
     {
-        var previous = _selectedIds;
-        _selectedIds = ids;
-        foreach (var item in _document!.Notes)
+        if (!_selectedIds.SetEquals(ids))
         {
-            if (previous.Contains(item.Id) != ids.Contains(item.Id))
-                UpdateNoteVisual(item.Id, item.Note);
+            _selectedIds = ids;
+            InvalidateScore();
         }
         RefreshSelection();
     }
@@ -73,15 +75,21 @@ public sealed partial class PianoRollView
     private PianoRollNote? HitNote(Point point)
     {
         PianoRollNote? hit = null;
-        var notes = _document!.Notes;
-        for (int i = notes.Count - 1; i >= 0; i--)
+        bool hitSelected = false;
+        for (int i = FirstNoteReaching(point.X); i < _notesByStart.Length; i++)
         {
-            var item = notes[i];
+            var item = _notesByStart[i];
+            if (TickX(item.Note.StartTick) > point.X)
+                break;
             if (!NoteContains(item.Note, point))
                 continue;
-            if (_selectedIds.Contains(item.Id))
-                return item;
-            hit ??= item;
+
+            bool selected = _selectedIds.Contains(item.Id);
+            if (hit is null || (selected && !hitSelected) || (selected == hitSelected && item.Id > hit.Value.Id))
+            {
+                hit = item;
+                hitSelected = selected;
+            }
         }
         return hit;
     }
@@ -135,13 +143,19 @@ public sealed partial class PianoRollView
     private void SurfacePointerMoved(object sender, PointerRoutedEventArgs args)
     {
         if (_pointerId != args.Pointer.PointerId)
+        {
+            if (ShowsDrumLanes && _pointerId is null)
+                ShowDrumHoverTip(HitNote(args.GetCurrentPoint(Surface).Position)?.Note.NoteNumber);
             return;
+        }
         var point = args.GetCurrentPoint(Surface).Position;
         RememberEditPointer(point);
         PreviewGesture(point);
         UpdateDragScroll();
         args.Handled = true;
     }
+
+    private void SurfacePointerExited(object sender, PointerRoutedEventArgs args) => ShowDrumHoverTip(null);
 
     private void RememberEditPointer(Point point) => _editPointer = new(
         point.X - EditorScroll.HorizontalOffset, point.Y - EditorScroll.VerticalOffset);
@@ -156,10 +170,13 @@ public sealed partial class PianoRollView
         {
             long cells = (long)Math.Round((point.X - _press.X) / CellWidth, MidpointRounding.AwayFromZero);
             int pitch = -(int)Math.Round((point.Y - _press.Y) / RowHeight, MidpointRounding.AwayFromZero);
+            var previous = _previewNotes[0];
             TransformSelection(_dragNotes, _previewNotes, grabbed.Note, cells, pitch, _resizeDrag);
-            foreach (var item in _previewNotes)
-                UpdateNoteVisual(item.Id, item.Note);
-            RefreshSelection();
+            if (_previewNotes[0] != previous)
+            {
+                InvalidateScore();
+                RefreshSelection();
+            }
             return;
         }
 
@@ -247,13 +264,14 @@ public sealed partial class PianoRollView
     {
         if (_pointerId is not null)
             _dragScrollTimer?.Stop();
-        foreach (var item in _dragNotes)
-            UpdateNoteVisual(item.Id, item.Note);
+        bool hadPreview = _previewNotes.Length > 0;
         _pointerId = null;
         _editDragStarted = false;
         _grabbedNote = null;
         _dragNotes = [];
         _previewNotes = [];
+        if (hadPreview)
+            InvalidateScore();
         SelectionBox.Visibility = Visibility.Collapsed;
         RefreshSelection();
     }
@@ -293,8 +311,7 @@ public sealed partial class PianoRollView
 
     private void EditorKeyDown(object sender, KeyRoutedEventArgs args)
     {
-        if (!_editingEnabled || _document is null || _pointerId is not null || _rulerPointerId is not null ||
-            _tempoPointerId is not null || _tempoMarkerFlyout is not null || GridSizeBox.FocusState != FocusState.Unfocused)
+        if (!_editingEnabled || _document is null || HasActiveGesture || GridSizeBox.FocusState != FocusState.Unfocused)
             return;
 
         bool control = IsDown(VirtualKey.Control);
@@ -309,8 +326,7 @@ public sealed partial class PianoRollView
                 CopySelection();
                 break;
             case VirtualKey.X when control:
-                if (CopySelection())
-                    DeleteSelected();
+                CutSelection();
                 break;
             case VirtualKey.V when control:
                 PasteSelection();
@@ -327,7 +343,8 @@ public sealed partial class PianoRollView
             case VirtualKey.Insert:
                 AddNext();
                 break;
-            case VirtualKey.Left or VirtualKey.Right or VirtualKey.Up or VirtualKey.Down when !control:
+            case VirtualKey.Left or VirtualKey.Right when HasNoteSelection && ((!control && !shift) || (control && shift)):
+            case VirtualKey.Up or VirtualKey.Down when !control:
                 Nudge(args.Key, shift);
                 break;
             default:
@@ -359,9 +376,10 @@ public sealed partial class PianoRollView
 
     private void GridSizeChanged(object sender, SelectionChangedEventArgs args)
     {
-        if (GridSizeBox is null || BeatLayer is null || EditorScroll is null)
+        if (GridSizeBox is null || ScoreDrawing is null || EditorScroll is null)
             return;
         UpdateGrid();
+        InvalidateScore();
         RefreshViewport();
         if (IsLoaded)
             DispatcherQueue.TryEnqueue(DispatcherQueuePriority.Low, () => Focus(FocusState.Programmatic));
@@ -382,6 +400,7 @@ public sealed partial class PianoRollView
 
     private void AddClicked(object sender, RoutedEventArgs args) => AddNext();
     private void DeleteClicked(object sender, RoutedEventArgs args) => DeleteSelected();
+    private void CutClicked(object sender, RoutedEventArgs args) => CutSelection();
     private void CopyClicked(object sender, RoutedEventArgs args) => CopySelection();
     private void PasteClicked(object sender, RoutedEventArgs args) => PasteSelection();
     private void UndoClicked(object sender, RoutedEventArgs args) => UndoEdit();

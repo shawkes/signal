@@ -11,7 +11,7 @@ public sealed partial class MainWindow
 
     private void UpdateMeterButton(long? playbackTick)
     {
-        long tick = playbackTick ?? (SongCaptureInProgress ? _recordingLoop?.StartTick : null) ?? 0;
+        long tick = playbackTick ?? (SongCaptureInProgress ? _recordingLoop?.StartTick ?? 0 : _pausedTick ?? _cueTick);
         var meter = _trackEditor.MeterMap.MeterAt(tick);
         if (meter == _displayedMeter)
             return;

@@ -1,7 +1,6 @@
 using Microsoft.UI.Input;
 using Microsoft.UI.Text;
 using Microsoft.UI.Xaml;
-using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
@@ -39,11 +38,13 @@ public sealed partial class PianoRollView : UserControl
         "Low Wood Block", "Mute Cuíca", "Open Cuíca", "Mute Triangle", "Open Triangle"
     ];
 
-    private readonly Dictionary<long, Border> _noteViews = [];
     private readonly Rectangle _rulerCursor = new() { Width = 2, Height = TimelineHeight };
     private readonly TranslateTransform _cursorOffset = new();
     private readonly TranslateTransform _rulerCursorOffset = new();
-    private (double Left, double Width, double Right, int Resolution, int Cells, MeterMap Meter, Palette Colors)? _paintedTimeGrid;
+    private readonly TranslateTransform _timelineOffset = new();
+    private readonly RectangleGeometry _timelineClip = new();
+    private (double Left, double Right, int Resolution, MeterMap Meter, Palette Colors)? _paintedRuler;
+    private (double Left, double Width)? _rulerViewport;
     private (double Top, double Height, bool Drums, Palette Colors)? _paintedKeys;
     private PianoRollDocument? _document;
     private MeterMap _meterMap = new(TempoMap.DefaultTicksPerQuarter, []);
@@ -59,6 +60,7 @@ public sealed partial class PianoRollView : UserControl
     private uint? _pointerId;
     private Point _press;
     private bool _editingEnabled = true;
+    private bool _viewportRefreshPending;
 
     private double CellWidth => BeatWidth / _cellsPerBeat;
     private bool ShowsDrumLanes => _defaultChannel == SongTrackEditor.DrumChannel;
@@ -69,6 +71,9 @@ public sealed partial class PianoRollView : UserControl
         InitializeComponent();
         Cursor.RenderTransform = _cursorOffset;
         _rulerCursor.RenderTransform = _rulerCursorOffset;
+        Timeline.RenderTransform = _timelineOffset;
+        TimelineViewport.Clip = _timelineClip;
+        RulerCursorLayer.Children.Add(_rulerCursor);
         Loaded += (_, _) =>
         {
             RefreshViewport();
@@ -76,6 +81,9 @@ public sealed partial class PianoRollView : UserControl
         };
         Unloaded += (_, _) =>
         {
+            CancelViewportRefresh();
+            _noteText?.Dispose();
+            _noteText = null;
             CancelGesture();
             CancelRulerGesture();
             CancelTempoGesture();
@@ -130,6 +138,7 @@ public sealed partial class PianoRollView : UserControl
             _document.Changed -= RefreshDocument;
         _document = document;
         document.Changed += RefreshDocument;
+        ShowDrumHoverTip(null);
         _editExtentTick = 0;
         if (_recordingDocument is null)
             _takeExtentTick = 0;
@@ -173,6 +182,7 @@ public sealed partial class PianoRollView : UserControl
 
         _meterMap = map;
         UpdateSurfaceExtent();
+        InvalidateScore();
         RefreshSelection();
         RefreshViewport();
     }
@@ -185,7 +195,7 @@ public sealed partial class PianoRollView : UserControl
         DispatcherQueue.TryEnqueue(DispatcherQueuePriority.Low, ApplyReveal);
     }
 
-    public void SetPlayhead(long? tick)
+    public void SetPlayhead(long? tick, bool reveal = false)
     {
         long? previous = _playhead;
         _playhead = tick;
@@ -201,7 +211,7 @@ public sealed partial class PianoRollView : UserControl
         double x = TickX(active);
         bool outsideView = x < left || x >= right;
         bool wasVisible = previous is { } prior && TickX(prior) >= left && TickX(prior) < right;
-        if (outsideView && (previous is null || wasVisible))
+        if (outsideView && (reveal || previous is null || wasVisible))
             EditorScroll.ChangeView(Math.Clamp(x - CellWidth, 0, EditorScroll.ScrollableWidth), null, null, true);
     }
 
@@ -217,7 +227,7 @@ public sealed partial class PianoRollView : UserControl
         SelectionBox.Fill = SelectionBox.Stroke = _palette.Loop;
         RecolorRecordingLayers();
         PaintPitchLanes();
-        PaintNotes();
+        InvalidateScore();
         RefreshViewport();
     }
 
@@ -226,15 +236,16 @@ public sealed partial class PianoRollView : UserControl
         if (_document is { } document && _selectedIds.Count != 0)
             _selectedIds.IntersectWith(document.Notes.Select(item => item.Id));
 
+        IndexDocumentNotes();
         UpdateSurfaceExtent();
-        PaintNotes();
+        InvalidateScore();
         RefreshSelection();
         RefreshViewport();
     }
 
     private void UpdateSurfaceExtent()
     {
-        long trackEnd = _document?.Notes.Select(item => item.Note.StartTick + item.Note.LengthTicks).DefaultIfEmpty().Max() ?? 0;
+        long trackEnd = _latestEndByStart.Length == 0 ? 0 : _latestEndByStart[^1];
         long lastTick = Math.Max(Math.Max(_timelineEnd, trackEnd), _loopRange?.EndTick ?? 0);
         lastTick = Math.Max(lastTick, _takeExtentTick);
         lastTick = Math.Max(lastTick, _editExtentTick);
@@ -282,16 +293,28 @@ public sealed partial class PianoRollView : UserControl
         double left = EditorScroll.HorizontalOffset;
         double top = EditorScroll.VerticalOffset;
         double right = Math.Min(Surface.Width, left + width);
-        var timeGrid = (left, width, right, _ticksPerBeat, _cellsPerBeat, _meterMap, _palette);
-        if (_paintedTimeGrid != timeGrid)
+        if (_paintedRuler is not { } rulerPage || left < rulerPage.Left || right > rulerPage.Right ||
+            rulerPage.Resolution != _ticksPerBeat || rulerPage.Meter != _meterMap || rulerPage.Colors != _palette)
         {
-            _paintedTimeGrid = timeGrid;
-            PaintTimeGrid(left, right, width);
+            double first = Math.Max(0, left - width);
+            double last = Math.Min(Surface.Width, right + width);
+            _paintedRuler = (first, last, _ticksPerBeat, _meterMap, _palette);
+            PaintRuler(first, last);
+            _rulerViewport = null;
+        }
+        _timelineOffset.X = _paintedRuler.Value.Left - left;
+
+        var ruler = (left, width);
+        if (_rulerViewport != ruler)
+        {
+            _rulerViewport = ruler;
+            _timelineClip.Rect = new Rect(0, 0, width, TimelineHeight);
             RefreshTempoLane();
             RefreshLoopRangeVisuals();
             RefreshPlayhead();
         }
 
+        RefreshRecordingViewport(left, top, width, height);
         var keys = (top, height, ShowsDrumLanes, _palette);
         if (_paintedKeys == keys)
             return;
@@ -304,16 +327,9 @@ public sealed partial class PianoRollView : UserControl
             PaintPitchLabel(PitchCount - 1 - row, row * RowHeight - top);
     }
 
-    private void PaintTimeGrid(double left, double right, double width)
+    private void PaintRuler(double left, double right)
     {
-        Timeline.Clip = new RectangleGeometry { Rect = new Rect(0, 0, width, TimelineHeight) };
         Timeline.Children.Clear();
-        int lines = 0;
-        long firstCell = CellAtPosition(left);
-        long lastCell = CellAtPosition(right);
-        for (long cell = firstCell; cell <= lastCell; cell++)
-            PlaceLine(TickX(TickOfCell(cell)), 1, _palette.MinorLine);
-
         long firstTick = long.CreateSaturating(Math.Floor(left / BeatWidth * _ticksPerBeat));
         long lastTick = long.CreateSaturating(Math.Ceiling(right / BeatWidth * _ticksPerBeat));
         for (long tick = _meterMap.PositionAt(firstTick).BeatTick; tick <= lastTick;)
@@ -322,7 +338,6 @@ public sealed partial class PianoRollView : UserControl
             bool bar = tick == pos.BarTick;
             double x = TickX(tick);
             var line = bar ? _palette.MajorLine : _palette.BeatLine;
-            PlaceLine(x, bar ? 2 : 1, line);
             AddRect(Timeline, x - left, bar ? 0 : TimelineHeight - 6, bar ? 2 : 1, bar ? TimelineHeight : 6, line);
             long next = _meterMap.NextBeatTick(tick);
             double labelWidth = bar ? TickX(_meterMap.NextBarTick(tick)) - x : TickX(next) - x;
@@ -335,21 +350,7 @@ public sealed partial class PianoRollView : UserControl
                 break;
             tick = next;
         }
-        AddRect(Timeline, 0, TimelineHeight - 1, width, 1, _palette.MajorLine);
-        Timeline.Children.Add(_rulerCursor);
-        while (BeatLayer.Children.Count > lines)
-            BeatLayer.Children.RemoveAt(BeatLayer.Children.Count - 1);
-
-        void PlaceLine(double x, double thickness, Brush color)
-        {
-            // Keep the visible line elements across page turns, especially on the 1/64 grid.
-            if (lines == BeatLayer.Children.Count)
-                BeatLayer.Children.Add(new Rectangle { Height = Surface.Height });
-            var rect = (Rectangle)BeatLayer.Children[lines++];
-            Canvas.SetLeft(rect, x);
-            rect.Width = thickness;
-            rect.Fill = color;
-        }
+        AddRect(Timeline, 0, TimelineHeight - 1, right - left, 1, _palette.MajorLine);
     }
 
     private void PaintPitchLabel(int pitch, double y)
@@ -371,74 +372,21 @@ public sealed partial class PianoRollView : UserControl
             accidental ? _palette.AccidentalKeyText : _palette.NaturalKeyText, pitch % 12 == 0);
     }
 
-    private void PaintNotes()
-    {
-        NotesLayer.Children.Clear();
-        _noteViews.Clear();
-        if (_document is null)
-            return;
-
-        foreach (var item in _document.Notes)
-        {
-            var border = new Border { Height = RowHeight - 4, CornerRadius = new CornerRadius(4), BorderThickness = new Thickness(1) };
-            var body = new Grid();
-            body.Children.Add(new TextBlock
-            {
-                Margin = new Thickness(6, 0, 7, 0),
-                FontSize = 11,
-                FontWeight = FontWeights.SemiBold,
-                VerticalAlignment = VerticalAlignment.Center,
-                Foreground = _palette.NoteText,
-                TextTrimming = TextTrimming.CharacterEllipsis
-            });
-            body.Children.Add(new Rectangle
-            {
-                Width = 2,
-                Height = 8,
-                RadiusX = 1,
-                RadiusY = 1,
-                Margin = new Thickness(0, 0, 3, 0),
-                HorizontalAlignment = HorizontalAlignment.Right,
-                VerticalAlignment = VerticalAlignment.Center,
-                Fill = _palette.Handle
-            });
-            border.Child = body;
-            NotesLayer.Children.Add(border);
-            _noteViews.Add(item.Id, border);
-            UpdateNoteVisual(item.Id, item.Note);
-        }
-
-        foreach (var item in _previewNotes)
-            UpdateNoteVisual(item.Id, item.Note);
-    }
-
-    private void UpdateNoteVisual(long id, SongNote note)
-    {
-        if (!_noteViews.TryGetValue(id, out var border))
-            return;
-
-        bool selected = _selectedIds.Contains(id);
-        double width = NoteWidth(note);
-        border.Width = width;
-        border.Background = selected ? _palette.SelectedNote : _palette.Note;
-        border.BorderBrush = selected ? _palette.SelectedOutline : _palette.NoteOutline;
-        Canvas.SetLeft(border, TickX(note.StartTick));
-        Canvas.SetTop(border, PitchY(note.NoteNumber) + 2);
-        Canvas.SetZIndex(border, selected ? 1 : 0);
-        bool percussion = note.Channel == SongTrackEditor.DrumChannel;
-        string name = Caption(note.NoteNumber, percussion);
-        AutomationProperties.SetName(border, $"{name}, tick {note.StartTick}, length {note.LengthTicks} ticks");
-        if (percussion)
-            ToolTipService.SetToolTip(border, $"{name} · MIDI note {note.NoteNumber}");
-        var body = (Grid)border.Child;
-        var label = (TextBlock)body.Children[0];
-        label.Text = name;
-        label.Visibility = width < 42 ? Visibility.Collapsed : Visibility.Visible;
-        body.Children[1].Visibility = width < 8 ? Visibility.Collapsed : Visibility.Visible;
-    }
-
     private void EditorViewChanged(object sender, ScrollViewerViewChangedEventArgs args)
     {
+        if (args.IsIntermediate && IsLoaded && !HasActiveGesture)
+        {
+            // The thumb can report several positions between display frames. Paint
+            // the latest viewport once, and apply the final position immediately.
+            if (!_viewportRefreshPending)
+            {
+                _viewportRefreshPending = true;
+                CompositionTarget.Rendering += RenderPendingViewport;
+            }
+            return;
+        }
+
+        CancelViewportRefresh();
         RefreshViewport();
         if (_pointerId is not null)
             PreviewGesture(EditPointerOnSurface());
@@ -450,9 +398,25 @@ public sealed partial class PianoRollView : UserControl
 
     private void EditorSizeChanged(object sender, SizeChangedEventArgs args)
     {
+        if (ReferenceEquals(sender, Surface))
+            InvalidateScore();
         RefreshViewport();
         if (_reveal is not null)
             DispatcherQueue.TryEnqueue(DispatcherQueuePriority.Low, ApplyReveal);
+    }
+
+    private void RenderPendingViewport(object? sender, object args)
+    {
+        CancelViewportRefresh();
+        RefreshViewport();
+    }
+
+    private void CancelViewportRefresh()
+    {
+        if (!_viewportRefreshPending)
+            return;
+        _viewportRefreshPending = false;
+        CompositionTarget.Rendering -= RenderPendingViewport;
     }
 
     private void ApplyReveal()
@@ -526,7 +490,7 @@ public sealed partial class PianoRollView : UserControl
 
     private long CellNearestTick(long tick) => (long)(((Int128)tick * _cellsPerBeat + _ticksPerBeat / 2) / _ticksPerBeat);
     private double NoteWidth(SongNote note) => NoteWidth(note.LengthTicks);
-    private double NoteWidth(long lengthTicks) => Math.Max(3, TickX(lengthTicks) - 1);
+    private double NoteWidth(long lengthTicks) => Math.Max(MinimumNoteWidth, TickX(lengthTicks) - 1);
     private double TickX(long tick) => tick * (BeatWidth / _ticksPerBeat);
     private static double PitchY(int pitch) => (PitchCount - 1 - pitch) * RowHeight;
     private static bool IsAccidental(int pitch) => pitch % 12 is 1 or 3 or 6 or 8 or 10;

@@ -155,6 +155,36 @@ public sealed class LoopPlaybackTests
         Assert.Equal(2, synth.Messages.Count(message => message.Status == 0x90 && message.Key == 61));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void AudioGapSkipsMissedDrumsAndResumesOnTheBeatGrid(bool crossesLoopBoundary)
+    {
+        var engine = Create();
+        var synth = new EventSynth();
+        var song = new Song(engine.TempoMap,
+        [
+            new SongTrack("Backing", [new(1, 10, 0, 60, 95),
+                new(2, 10, SongTrackEditor.DrumChannel, 36, 95),
+                new(8, 3, SongTrackEditor.DrumChannel, 42, 95)],
+                [new(3, 0xc0, 8, 0)])
+        ]);
+        const int loopFrames = 24_000;
+        engine.PlaySong(song, synth, new LoopRange(0, 480));
+        int framesBeforeGap = crossesLoopBoundary ? loopFrames - 50 : 60;
+        Render(engine, Origin, framesBeforeGap);
+        synth.Messages.Clear();
+
+        long resume = Origin + (crossesLoopBoundary ? loopFrames : 0) + 250;
+        Render(engine, resume, 250);
+
+        Assert.Contains(new ReceivedMessage(framesBeforeGap, 0xc0, 8, 0), synth.Messages);
+        Assert.Contains(new ReceivedMessage(framesBeforeGap, 0x90, 60, 95), synth.Messages);
+        Assert.DoesNotContain(synth.Messages, message => message.Status == 0x99 && message.Key == 36);
+        Assert.Contains(new ReceivedMessage(framesBeforeGap + 150, 0x99, 42, 95), synth.Messages);
+        Assert.Equal(10, engine.PlaybackTick);
+    }
+
     [Fact]
     public void ChasesSetupWhenANonzeroLoopStartRoundsToFrameZero()
     {

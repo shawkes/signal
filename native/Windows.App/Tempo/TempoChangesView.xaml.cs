@@ -126,6 +126,7 @@ public sealed partial class TempoChangesView : UserControl
         AddButton.IsEnabled = valid && !occupied;
         UpdateButton.IsEnabled = valid && _selected is not null && !openingMoved && !collision && point != _selected.Value;
         RemoveButton.IsEnabled = _selected?.Tick > 0;
+        RemoveLaterButton.IsEnabled = _changes.Count > 1;
         if (valid && openingMoved)
             error = "The opening tempo stays at beat 1, tick 0. Use Add to create a later point.";
         else if (valid && collision)
@@ -167,4 +168,10 @@ public sealed partial class TempoChangesView : UserControl
     }
 
     private sealed record TempoRow(TempoChange Change, string Label);
+
+    private void RemoveLaterClicked(object sender, RoutedEventArgs args)
+    {
+        _changes.RemoveRange(1, _changes.Count - 1);
+        RefreshPoints(0);
+    }
 }

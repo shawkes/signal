@@ -1,12 +1,17 @@
+using System.Globalization;
+using System.Runtime.InteropServices;
+using System.Text;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Signal.Native.Engine;
 using Signal.Native.SoundFont;
+using Windows.ApplicationModel.DataTransfer;
 
 namespace Signal.Native.Windows.App;
 
 public sealed partial class MainWindow
 {
+    private static readonly int[] RecordingDivisions = [0, 4, 8, 16, 32, 64];
     private CapturePurpose _capturePurpose;
     private readonly Dictionary<int, List<SongNote>> _capturedSongNotes = [];
     private int? _countInRemaining;
@@ -16,8 +21,9 @@ public sealed partial class MainWindow
     private RecordingTestTiming? _placementTiming;
     private double _placementOffset;
     private bool _placementQuantized;
-    private bool _placementClickContinuous;
+    private bool _placementUsedClick;
     private double? _placementSuggestedOffset;
+    private OpeningRecordingTiming? _openingTiming;
 
     private bool CaptureInProgress => _recording || _finishingTake;
     private bool SongCaptureInProgress => CaptureInProgress && _capturePurpose == CapturePurpose.Song;
@@ -34,8 +40,13 @@ public sealed partial class MainWindow
     }
 
     private double RecordingOffset => double.IsFinite(OffsetBox.Value) ? OffsetBox.Value : 10;
-    // Off is followed by quarter notes and successive halvings.
-    private int RecordingGrid => QuantizeBox.SelectedIndex > 0 ? 4 << (QuantizeBox.SelectedIndex - 1) : 0;
+    private int RecordingGrid => QuantizeBox.SelectedIndex >= 0 ? RecordingDivisions[QuantizeBox.SelectedIndex] : 0;
+
+    private void RecordingQuantizeChanged(object sender, SelectionChangedEventArgs args)
+    {
+        if (QuantizeBox.SelectedIndex >= 0)
+            TrySavePreference(() => _preferences.SaveQuantizationDivision(RecordingGrid));
+    }
 
     private void SongRecordClicked(object sender, RoutedEventArgs args)
     {
@@ -84,8 +95,9 @@ public sealed partial class MainWindow
         }
 
         StopSongPlayback();
-        BeginTake(engine.SetRecording(true, RecordingOffset, RecordingGrid), CapturePurpose.PlacementTest, _selectedTrack);
-        MetronomeSwitch.IsOn = true;
+        _placementUsedClick = TestMetronomeBox.IsChecked == true;
+        BeginTake(engine.SetRecording(true, RecordingOffset, RecordingGrid, playTestMetronome: _placementUsedClick),
+            CapturePurpose.PlacementTest, _selectedTrack);
         UpdateReadout();
         UpdateControls();
     }
@@ -96,7 +108,6 @@ public sealed partial class MainWindow
         _takeId = takeId;
         _capturePurpose = purpose;
         _recording = true;
-        UpdateSettingsMetronome();
         _captureTrack = track;
         if (purpose != CapturePurpose.Calibration)
         {
@@ -107,11 +118,13 @@ public sealed partial class MainWindow
             {
                 _placementOffset = RecordingOffset;
                 _placementQuantized = RecordingGrid != 0;
-                _placementClickContinuous = true;
             }
             _rows.Clear();
             _capturedNotes.Clear();
             _capturedSongNotes.Clear();
+            _openingTiming = null;
+            CopyOpeningTimingButton.Visibility = Visibility.Collapsed;
+            CopyOpeningTimingButton.Content = "Copy opening timing";
             _firstImportedNote = null;
             _noteCount = 0;
         }
@@ -128,7 +141,6 @@ public sealed partial class MainWindow
             engine.SetRecording(false, 0);
         _recording = false;
         _finishingTake = true;
-        UpdateSettingsMetronome();
         UpdateControls();
     }
 
@@ -143,6 +155,8 @@ public sealed partial class MainWindow
         }
         else if (_capturePurpose == CapturePurpose.Song)
         {
+            _openingTiming = engine.ReadOpeningRecordingTiming(_takeId);
+            CopyOpeningTimingButton.Visibility = _openingTiming is null ? Visibility.Collapsed : Visibility.Visible;
             CommitSongTake();
             RollView.EndRecordingPreview();
         }
@@ -150,14 +164,47 @@ public sealed partial class MainWindow
         {
             if (_placementTiming is { } timing)
             {
-                ShowPlacementResult(timing.Summarize(playedWithClick: _placementClickContinuous && !_audioFailed));
+                ShowPlacementResult(timing.Summarize(playedWithClick: _placementUsedClick && !_audioFailed));
                 _placementTiming = null;
             }
             AddTakeToPianoRoll(engine.TempoMap.TicksPerQuarter);
         }
-        UpdatePlayhead();
+        if (_capturePurpose == CapturePurpose.Song)
+            RewindSong();
+        else
+            UpdatePlayhead();
         UpdateLoopDisplay();
         UpdateControls();
+    }
+
+    private void CopyOpeningTimingClicked(object sender, RoutedEventArgs args)
+    {
+        if (_openingTiming is not { } timing)
+            return;
+
+        var text = new StringBuilder();
+        string grid = timing.QuantizationDivision == 0 ? "Off" : $"1/{timing.QuantizationDivision}";
+        text.AppendLine(FormattableString.Invariant(
+            $"Offset {timing.OffsetMilliseconds:0.###} ms, Quantize {grid}, Count-in {(timing.CountIn ? "On" : "Off")}, first tick {timing.FirstTick}, PPQ {timing.TicksPerQuarter}"));
+        text.AppendLine($"Saved notes in take {_noteCount}, opening hits shown {timing.Notes.Count}, omitted {timing.Omitted}");
+        text.AppendLine("Channel\tPitch\tVelocity\tReceived ms from start\tAfter offset ms from start\tTarget tick");
+        foreach (var note in timing.Notes)
+        {
+            string target = note.PlacedTick?.ToString(CultureInfo.InvariantCulture) ?? "Before capture";
+            text.AppendLine(FormattableString.Invariant(
+                $"{note.Channel + 1}\t{note.Pitch}\t{note.Velocity}\t{note.RawMilliseconds:0.###}\t{note.AdjustedMilliseconds:0.###}\t{target}"));
+        }
+        try
+        {
+            var data = new DataPackage();
+            data.SetText(text.ToString());
+            Clipboard.SetContent(data);
+            CopyOpeningTimingButton.Content = "Opening timing copied";
+        }
+        catch (COMException)
+        {
+            CopyOpeningTimingButton.Content = "Retry copying timing";
+        }
     }
 
     private void ShowPlacementResult(RecordingTestResult? result)
@@ -194,19 +241,27 @@ public sealed partial class MainWindow
         string quantization = _placementQuantized ? " (before grid snapping)" : "";
         PlacementTimingText.Text = $"Median beat placement was {DescribeBeatTiming(result.MedianRawMilliseconds)} on input " +
             $"and {DescribeBeatTiming(result.MedianAdjustedMilliseconds)} after the {offset} ms offset{quantization}.";
-        PlacementTimingText.Visibility = Visibility.Visible;
+        PlacementTimingText.Visibility = _placementUsedClick ? Visibility.Visible : Visibility.Collapsed;
         if (_placementSuggestedOffset is { } target)
         {
             double shift = RoundRecordingOffset(target - _placementOffset);
             string effect = shift == 0 ? "This matches the offset used for this take." :
                 $"Future recordings will land {Math.Abs(shift):0.0} ms {(shift > 0 ? "earlier" : "later")} than with this take’s setting.";
-            PlacementOffsetText.Text = $"Suggested recording offset · {target:+0.0;-0.0;0.0} ms. {effect}";
+            string basis = result.TapAnalysis is { UsedRecentBeats: true } recent
+                ? $"Based on the last {recent.BeatsWithInput} beats with input. " : "";
+            PlacementOffsetText.Text = $"Suggested recording offset · {target:+0.0;-0.0;0.0} ms. {basis}{effect}";
+        }
+        else if (result.TapAnalysis is { } taps)
+        {
+            PlacementOffsetText.Text = taps.UsableTaps < TapTimingTest.MinimumTaps
+                ? $"{taps.UsableTaps} of {taps.BeatsWithInput} beats had one usable tap. Play one note near each click for at least {TapTimingTest.MinimumTaps} clicks."
+                : $"{taps.AgreeingTaps} of {taps.BeatsWithInput} beats had single taps that agreed on an offset. This take needed {taps.RequiredAgreeingTaps} agreeing taps.";
         }
         else
         {
-            PlacementOffsetText.Text = _placementClickContinuous
-                ? $"For an offset suggestion, record at least {TapTimingTest.MinimumTaps} evenly timed single notes, one per click."
-                : "Keep the metronome on for the whole test to get an offset suggestion.";
+            PlacementOffsetText.Text = _placementUsedClick
+                ? "The test click was interrupted. Start a new test to check your offset."
+                : "Enable the test metronome and play one note per click to check your offset.";
         }
     }
 

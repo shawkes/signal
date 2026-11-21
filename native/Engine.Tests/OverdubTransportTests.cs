@@ -151,6 +151,39 @@ public sealed class OverdubTransportTests
     }
 
     [Fact]
+    public void RepeatedBoundaryHitsKeepTheSameCompensatedPlacementAndDoNotReplayLateAfterAGap()
+    {
+        const int loopFrames = 750;
+        const int passes = 64;
+        var engine = CreateEngine();
+        var song = new Song(ChangingTempo(), []);
+        engine.RecordSong(song, SilentMonitorSynth.Instance, false, -10, timestamp: Origin,
+            loop: Loop, overdubSynth: new GateSynth(OverdubLevel));
+
+        for (int pass = 0; pass < passes; pass++)
+        {
+            long frame = Origin + pass * loopFrames;
+            Assert.True(engine.TryEnqueue(new MidiMessage(frame + 2, 0x99, 42, 90)));
+            Assert.True(engine.TryEnqueue(new MidiMessage(frame + 80, 0x89, 42, 0)));
+            var audio = Render(engine, frame, loopFrames);
+            Assert.True(engine.TryReadNote(out var note));
+            Assert.Equal((101L, 8L, 78L), (note.StartTick, note.LengthTicks, note.PlayedLengthFrames));
+            if (pass > 0)
+            {
+                Assert.Equal(0, audio[9 * 2]);
+                Assert.Equal(OverdubLevel, audio[10 * 2]);
+            }
+        }
+
+        // Missing the first 25 frames loses the attack. The remaining duration
+        // of that drum note must never trigger a replacement attack at frame 25.
+        var afterGap = Render(engine, Origin + passes * loopFrames + 25, 40);
+        Assert.All(afterGap, sample => Assert.Equal(0, sample));
+        Assert.Equal(0, engine.DroppedMidiMessages);
+        Assert.Equal(0, engine.DroppedRecordedNotes);
+    }
+
+    [Fact]
     public void LoopCaptureAndReplayRenderWithoutManagedAllocationsAfterWarmup()
     {
         var engine = CreateEngine();

@@ -36,5 +36,7 @@
             <Button x:Name="UpdateButton" Content="Update selected" Click="UpdateClicked" />
             <Button x:Name="RemoveButton" Content="Remove" Click="RemoveClicked" />
         </StackPanel>
+        <Button x:Name="RemoveLaterButton" Content="Remove later tempos" Click="RemoveLaterClicked"
+                ToolTipService.ToolTip="Keep the opening tempo for the entire song. Changes take effect when you click Apply." />
     </StackPanel>
 </UserControl>

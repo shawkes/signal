@@ -15,7 +15,10 @@ public sealed class RecordingTestTimingTests
         timing.Add(Note(-68, -78, null));
         timing.Add(Note(220, 210, null));
 
-        Assert.Equal(new RecordingTestResult(6, -80, -90, null, null), timing.Summarize());
+        Assert.Equal(new RecordingTestResult(6, -80, -90, null, null)
+        {
+            TapAnalysis = new RecordingTestTapAnalysis(1, 0, 0, 1, null)
+        }, timing.Summarize());
     }
 
     [Fact]
@@ -27,7 +30,7 @@ public sealed class RecordingTestTimingTests
         for (int i = 99; i >= 0; i--)
             timing.Add(Note(i, i - 10, i < 20 ? i : null));
 
-        Assert.Equal(new RecordingTestResult(100, 49.5, 39.5, 9.5, 18), timing.Summarize());
+        Assert.Equal(new RecordingTestResult(100, 49.5, 39.5, 9.5, 18), timing.Summarize(playedWithClick: false));
     }
 
     [Theory]
@@ -44,8 +47,9 @@ public sealed class RecordingTestTimingTests
 
         var result = timing.Summarize()!;
         Assert.Equal((double)raw, result.SuggestedOffsetMilliseconds);
+        Assert.Equal(new RecordingTestTapAnalysis(6, 6, 6, 5, raw), result.TapAnalysis);
         Assert.Equal((double)(raw - currentOffset), result.MedianAdjustedMilliseconds);
-        Assert.Null(timing.Summarize(playedWithClick: false)!.SuggestedOffsetMilliseconds);
+        Assert.Null(timing.Summarize(playedWithClick: false)!.TapAnalysis);
     }
 
     [Fact]
@@ -75,6 +79,7 @@ public sealed class RecordingTestTimingTests
             timing.Add(Note(raw, adjusted, 8) with { NearestBeat = beat });
         var result = timing.Summarize()!;
         Assert.Null(result.SuggestedOffsetMilliseconds);
+        Assert.Equal(new RecordingTestTapAnalysis(8, 0, 0, 7, null), result.TapAnalysis);
         Assert.Equal((double)raw, result.MedianRawMilliseconds);
         Assert.Equal(8d, result.MedianMonitorDelayMilliseconds);
     }
@@ -88,7 +93,30 @@ public sealed class RecordingTestTimingTests
         Assert.Equal(25d, timing.Summarize()!.SuggestedOffsetMilliseconds);
         for (int beat = 7; beat < 13; beat++)
             timing.Add(Note(-150, -160, 0) with { NearestBeat = beat });
-        Assert.Null(timing.Summarize()!.SuggestedOffsetMilliseconds);
+        var result = timing.Summarize()!;
+        Assert.Null(result.SuggestedOffsetMilliseconds);
+        Assert.Equal(new RecordingTestTapAnalysis(13, 13, 7, 11, null), result.TapAnalysis);
+    }
+
+    [Fact]
+    public void SteadyEndingCanSuggestAnOffsetWhenTheWholeTakeVaries()
+    {
+        var timing = new RecordingTestTiming();
+        for (int beat = 40; beat >= 1; beat--)
+        {
+            if (beat is 3 or 6 or 15 or 20)
+                continue;
+
+            double raw = (beat <= 22 ? -33 : -115) + (beat % 2 == 0 ? 1 : -1);
+            timing.Add(Note(raw, raw + 66, 37.4) with { NearestBeat = beat });
+        }
+
+        var result = timing.Summarize()!;
+        Assert.Equal(36, result.NoteCount);
+        Assert.Equal(-74, result.MedianRawMilliseconds);
+        Assert.Equal(-8, result.MedianAdjustedMilliseconds);
+        Assert.Equal(-115d, result.SuggestedOffsetMilliseconds);
+        Assert.Equal(new RecordingTestTapAnalysis(12, 12, 12, 10, -115) { UsedRecentBeats = true }, result.TapAnalysis);
     }
 
     private static RecordedNote Note(double raw, double adjusted, double? monitorDelay) =>

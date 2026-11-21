@@ -14,7 +14,6 @@ public sealed partial class MainWindow
     private int _activeTapInput = -1;
     private TapTimingTest? _tapTest;
     private string _tapInputLabel = "";
-    private bool _metronomeBeforeTapTest;
 
     private void CalibrationInputChanged(object sender, SelectionChangedEventArgs args)
     {
@@ -40,12 +39,10 @@ public sealed partial class MainWindow
 
         _tapTest = new TapTimingTest();
         _tapInputLabel = input == SpaceTapInput ? "Space key" : "MIDI keyboard";
-        _metronomeBeforeTapTest = MetronomeSwitch.IsOn;
         Volatile.Write(ref _activeTapInput, input);
         ConfigureLiveMidi(engine, muted: true);
         engine.RequestMidiReset();
-        BeginTake(engine.SetRecording(true, 0), CapturePurpose.Calibration);
-        MetronomeSwitch.IsOn = true;
+        BeginTake(engine.SetRecording(true, 0, playTestMetronome: true), CapturePurpose.Calibration);
         UpdateControls();
         if (input == SpaceTapInput)
             CalibrationButton.Focus(FocusState.Programmatic);
@@ -74,7 +71,6 @@ public sealed partial class MainWindow
     private void FinishCalibration()
     {
         Volatile.Write(ref _activeTapInput, -1);
-        MetronomeSwitch.IsOn = _metronomeBeforeTapTest;
     }
 
     private void ApplyCalibrationClicked(object sender, RoutedEventArgs args)

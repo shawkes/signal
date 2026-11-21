@@ -112,7 +112,8 @@ internal sealed class OverdubReplay(
         for (int slot = 0; slot < _noteCount; slot++)
         {
             var note = _notes[slot];
-            if (note.FirstPass <= pass && note.StartFrame < position && position < note.EndFrame)
+            if (note.Channel != SongTrackEditor.DrumChannel && note.FirstPass <= pass &&
+                note.StartFrame < position && position < note.EndFrame)
                 Attack(slot, note);
         }
     }

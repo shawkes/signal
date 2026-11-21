@@ -8,6 +8,12 @@ public sealed partial class PianoRollView
 
     private bool CanPaste => _editingEnabled && _document is not null && _clipboard is not null;
 
+    private void CutSelection()
+    {
+        if (_editingEnabled && CopySelection())
+            DeleteSelected();
+    }
+
     private bool CopySelection()
     {
         var selection = SelectedNotes();

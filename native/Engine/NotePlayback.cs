@@ -12,6 +12,7 @@ internal sealed class NotePlayback(int sampleRate, MeterMap liveMeter)
     private readonly float[] _scratch = new float[512];
     private readonly int _fadeFrames = Math.Max(1, sampleRate / 100);
     private readonly int _loopFadeFrames = Math.Max(1, sampleRate / 500);
+    private readonly PlaybackEvent?[] _loopRecoveryHeld = new PlaybackEvent?[Channels * Keys];
     private PlaybackPlan? _requested;
     private PlaybackPlan? _active;
     private PlaybackLoop? _loop;
@@ -20,6 +21,7 @@ internal sealed class NotePlayback(int sampleRate, MeterMap liveMeter)
     private int _nextEvent;
     private long _startFrame;
     private long _firstAllowedOnset;
+    private long? _nextLoopFrame;
 
     public long? Tick
     {
@@ -136,6 +138,7 @@ internal sealed class NotePlayback(int sampleRate, MeterMap liveMeter)
             }
             _active = requested;
             _loop = null;
+            _nextLoopFrame = null;
             _startFrame = requested?.OriginFrame ?? firstFrame;
             _firstAllowedOnset = 0;
             _nextEvent = 0;
@@ -181,6 +184,7 @@ internal sealed class NotePlayback(int sampleRate, MeterMap liveMeter)
             return;
 
         _loop = next;
+        _nextLoopFrame = null;
         long position = firstFrame - _startFrame;
         if (next is { } anchoredLoop && active.OriginFrame is long origin)
         {
@@ -202,6 +206,9 @@ internal sealed class NotePlayback(int sampleRate, MeterMap liveMeter)
         MetronomeMixer? mixMetronome)
     {
         long position = firstFrame - _startFrame;
+        if (_nextLoopFrame is { } expected && firstFrame > expected && position < loop.EndFrame)
+            SeekLoop(active, loop, firstFrame, position);
+        _nextLoopFrame = firstFrame + output.Length / 2;
         int fade = (int)Math.Min(_loopFadeFrames, Math.Max(1, loop.Length / 2));
         while (!output.IsEmpty)
         {
@@ -232,11 +239,48 @@ internal sealed class NotePlayback(int sampleRate, MeterMap liveMeter)
     private void SeekLoop(PlaybackPlan active, PlaybackLoop loop, long firstFrame, long position)
     {
         active.Synth.Reset();
-        foreach (var message in loop.Chase)
-            active.Synth.ProcessMidi(message.Status, message.Data1, message.Data2);
         _startFrame = firstFrame - position;
         _firstAllowedOnset = loop.StartFrame;
-        _nextEvent = 0;
+        if (position == loop.StartFrame)
+        {
+            foreach (var message in loop.Chase)
+                active.Synth.ProcessMidi(message.Status, message.Data1, message.Data2);
+            _nextEvent = 0;
+            return;
+        }
+
+        // A skipped buffer can land in the middle of a pass. Recover the state at
+        // that position without bunching every missed attack at the first writable frame.
+        Array.Clear(_loopRecoveryHeld);
+        foreach (var message in loop.Chase)
+            RecoverMessage(message);
+        _nextEvent = FirstAtOrAfter(loop.Events, position);
+        for (int i = 0; i < _nextEvent; i++)
+            RecoverMessage(loop.Events[i]);
+        for (int i = _nextEvent; i < loop.Events.Length && loop.Events[i].Frame == position; i++)
+            ClearHeldAtBoundary(loop.Events[i], _loopRecoveryHeld);
+        foreach (var held in _loopRecoveryHeld)
+        {
+            if (held is { } message)
+                active.Synth.ProcessMidi(message.Status, message.Data1, message.Data2);
+        }
+
+        void RecoverMessage(PlaybackEvent message)
+        {
+            if (message.Command == 0x90)
+            {
+                int channel = message.Status & 0x0f;
+                // Percussion attacks have already passed, even if a key is still held.
+                if (channel != SongTrackEditor.DrumChannel)
+                    _loopRecoveryHeld[channel * Keys + message.Data1] = message;
+            }
+            else
+            {
+                ClearHeldAtBoundary(message, _loopRecoveryHeld);
+                if (message.Command != 0x80)
+                    active.Synth.ProcessMidi(message.Status, message.Data1, message.Data2);
+            }
+        }
     }
 
     private void RenderSong(Span<float> output, long firstFrame, PlaybackPlan active,

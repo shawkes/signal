@@ -26,6 +26,7 @@ internal sealed class RecordingPreferences(string directory)
 {
     private const string OffsetFile = "recording-offset.json";
     private const string MidiInputFile = "midi-input.json";
+    private const string QuantizationFile = "recording-quantization.json";
 
     public static RecordingPreferences ForCurrentUser() => new(Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Signal Native"));
@@ -39,8 +40,11 @@ internal sealed class RecordingPreferences(string directory)
     public MidiInputPreference? ReadMidiInput() =>
         Read<MidiInputPreference>(MidiInputFile) is { Name.Length: > 0 } device ? device : null;
 
+    public int? ReadQuantizationDivision() => Read<int?>(QuantizationFile);
+
     public void SaveOffset(double value) => Write(OffsetFile, value);
     public void SaveMidiInput(MidiInputPreference? value) => Write(MidiInputFile, value);
+    public void SaveQuantizationDivision(int value) => Write(QuantizationFile, value);
 
     private T? Read<T>(string name)
     {
