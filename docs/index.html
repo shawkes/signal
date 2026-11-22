@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Signal Uno is an open-source desktop MIDI sequencer for Windows, Linux, and macOS.">
+  <meta name="theme-color" content="#11111a">
+  <title>Signal Uno — Desktop MIDI sequencer</title>
+  <link rel="icon" type="image/svg+xml" href="./signaluno.svg" sizes="any">
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="site-header">
+    <div class="container header-inner">
+      <a class="brand" href="./" aria-label="Signal Uno home">
+        <img class="brand-mark" src="./signaluno.svg" width="48" height="48" alt="">
+        Signal Uno
+      </a>
+      <nav aria-label="Main navigation">
+        <a href="#features">Features</a>
+        <a href="#build">Build</a>
+        <a href="https://github.com/shawkes/signal">GitHub</a>
+      </nav>
+    </div>
+  </header>
+
+  <main id="main" class="container">
+    <section class="hero" aria-labelledby="hero-title">
+      <div>
+        <h1 id="hero-title">Make music <span>with MIDI.</span></h1>
+        <p class="intro">An open-source desktop sequencer for composing, recording, and editing MIDI on Windows, Linux, and macOS.</p>
+        <div class="hero-actions">
+          <a class="button button-primary" href="https://github.com/shawkes/signal">View on GitHub</a>
+          <a class="button button-secondary" href="#build">Build from source</a>
+        </div>
+      </div>
+
+      <figure class="preview">
+        <figcaption class="preview-header">
+          <strong>Piano roll</strong>
+          <span>Illustration</span>
+        </figcaption>
+        <div class="roll" aria-hidden="true">
+          <div class="roll-corner"></div>
+          <div class="ruler"><span>1</span><span>2</span><span>3</span><span>4</span></div>
+          <div class="keys">
+            <span>C5</span><span></span><span class="black"></span><span></span><span class="black"></span><span>G4</span><span class="black"></span><span></span><span></span><span class="black"></span><span></span><span class="black"></span><span>C4</span>
+          </div>
+          <div class="notes">
+            <i class="note bass" style="--beat: 0; --row: 12; --duration: 3.85"></i>
+            <i class="note bass" style="--beat: 4; --row: 9; --duration: 3.85"></i>
+            <i class="note bass" style="--beat: 8; --row: 7; --duration: 3.85"></i>
+            <i class="note bass" style="--beat: 12; --row: 5; --duration: 3.85"></i>
+            <i class="note" style="--beat: 0; --row: 8; --duration: .9"></i>
+            <i class="note" style="--beat: 1; --row: 5; --duration: .9"></i>
+            <i class="note" style="--beat: 2; --row: 0; --duration: 1.9"></i>
+            <i class="note" style="--beat: 4; --row: 5; --duration: .9"></i>
+            <i class="note" style="--beat: 5; --row: 3; --duration: .9"></i>
+            <i class="note" style="--beat: 6; --row: 0; --duration: 1.9"></i>
+            <i class="note" style="--beat: 8; --row: 3; --duration: 1.4"></i>
+            <i class="note" style="--beat: 9.5; --row: 7; --duration: .9"></i>
+            <i class="note" style="--beat: 10.5; --row: 5; --duration: 1.4"></i>
+            <i class="note" style="--beat: 12; --row: 1; --duration: .9"></i>
+            <i class="note" style="--beat: 13; --row: 5; --duration: .9"></i>
+            <i class="note" style="--beat: 14; --row: 8; --duration: 1.85"></i>
+            <span class="playhead"></span>
+          </div>
+        </div>
+      </figure>
+    </section>
+
+    <section id="features" class="features" aria-labelledby="features-title">
+      <h2 id="features-title">From first note to finished MIDI</h2>
+      <ul class="feature-list">
+        <li>
+          <h3>Edit in the piano roll</h3>
+          <p>Draw and move notes, adjust velocity, and automate volume and pan. Mute or solo tracks as you work.</p>
+        </li>
+        <li>
+          <h3>Record and audition</h3>
+          <p>Record from a MIDI controller or click the piano keys to audition instruments and drums with a SoundFont.</p>
+        </li>
+        <li>
+          <h3>Take your music with you</h3>
+          <p>Open and save Standard MIDI Files, or export your arrangement as Ogg Vorbis audio.</p>
+        </li>
+      </ul>
+    </section>
+
+    <section id="build" class="build" aria-labelledby="build-title">
+      <div>
+        <h2 id="build-title">Build from source</h2>
+        <p>Signal Uno is written in C# with Uno Platform. Its audio rendering and MIDI input run independently of the editor. Clone the repository and run these commands from its root with the .NET 10 SDK installed.</p>
+        <a href="https://github.com/shawkes/signal#build-and-run">Read the build and run guide</a>
+      </div>
+      <pre tabindex="0" aria-label="Build and run commands"><code>dotnet build native/Signal.Native.Uno.slnx -c Release
+dotnet run --project native/Uno.App/Signal.Native.Uno.App.csproj -c Release -f net10.0-desktop --no-build</code></pre>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container footer-inner">
+      <p>Signal Uno is a desktop fork of <a href="https://github.com/ryohey/signal">ryohey’s signal</a>.</p>
+      <a href="https://github.com/shawkes/signal/blob/main/LICENSE">MIT License</a>
+    </div>
+  </footer>
+</body>
+</html>

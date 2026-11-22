@@ -173,9 +173,20 @@
                             </StackPanel>
                             <ListView x:Name="TrackList" Grid.Row="2" SelectionMode="Single"
                                       SelectionChanged="TrackChanged" AutomationProperties.Name="Song tracks">
+                                <ListView.Resources>
+                                    <SolidColorBrush x:Key="ListViewItemBackgroundPointerOver"
+                                                     Color="{ThemeResource TextFillColorPrimary}" Opacity="0.09" />
+                                    <SolidColorBrush x:Key="ListViewItemBackgroundSelected"
+                                                     Color="{ThemeResource SystemAccentColor}" Opacity="0.28" />
+                                    <SolidColorBrush x:Key="ListViewItemBackgroundSelectedPointerOver"
+                                                     Color="{ThemeResource SystemAccentColor}" Opacity="0.38" />
+                                    <SolidColorBrush x:Key="ListViewItemBackgroundSelectedPressed"
+                                                     Color="{ThemeResource SystemAccentColor}" Opacity="0.33" />
+                                </ListView.Resources>
                                 <ListView.ItemContainerStyle>
-                                    <Style TargetType="ListViewItem">
+                                    <Style TargetType="ListViewItem" BasedOn="{StaticResource ListViewItemExpanded}">
                                         <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                                        <Setter Property="Padding" Value="8,0" />
                                     </Style>
                                 </ListView.ItemContainerStyle>
                                 <ListView.ItemTemplate>
@@ -193,6 +204,7 @@
                                             </Grid.ColumnDefinitions>
                                             <StackPanel Spacing="2">
                                                 <TextBlock Text="{x:Bind Name}" TextTrimming="CharacterEllipsis"
+                                                           Foreground="{ThemeResource TextFillColorPrimaryBrush}"
                                                            Style="{StaticResource BodyStrongTextBlockStyle}" />
                                                 <TextBlock Text="{x:Bind Detail, Mode=OneWay}" TextTrimming="CharacterEllipsis"
                                                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"

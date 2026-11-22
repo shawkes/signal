@@ -12,6 +12,8 @@
     <SharedUI>../Windows.App</SharedUI>
   </PropertyGroup>
   <ItemGroup>
+    <UnoIcon Include="Assets/Icons/signaluno.svg"
+             ForegroundFile="Assets/Icons/signaluno_foreground.svg" ForegroundScale="0.84" />
     <PackageReference Include="PortAudioSharp2" Version="1.0.6" />
     <PackageReference Include="RtMidi.Net" Version="2.0.0" />
     <ProjectReference Include="../Engine/Signal.Native.Engine.csproj" />
