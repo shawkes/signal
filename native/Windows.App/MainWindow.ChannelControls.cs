@@ -135,7 +135,7 @@ public sealed partial class MainWindow
             Reload();
             await new ContentDialog
             {
-                XamlRoot = WorkspaceTabs.XamlRoot,
+                XamlRoot = WorkspaceRoot.XamlRoot,
                 Title = $"{control} points · Channel {track.PrimaryChannel + 1}",
                 Content = panel,
                 CloseButtonText = "Done"

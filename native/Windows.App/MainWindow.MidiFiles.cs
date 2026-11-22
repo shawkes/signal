@@ -84,17 +84,14 @@ public sealed partial class MainWindow
 
     private async void NewSongClicked(object sender, RoutedEventArgs args)
     {
-        if (_fileBusy || CaptureInProgress)
+        if (_fileBusy || CaptureInProgress || AudioMidiSettingsOpen)
             return;
 
         SetFileBusy(true);
         try
         {
             if (await ConfirmReplaceSongAsync())
-            {
                 ReplaceSong(CreateEmptySong());
-                WorkspaceTabs.SelectedItem = PianoRollTab;
-            }
         }
         catch (Exception error)
         {
@@ -108,6 +105,9 @@ public sealed partial class MainWindow
 
     private async void OpenSongClicked(object sender, RoutedEventArgs args)
     {
+        if (AudioMidiSettingsOpen)
+            return;
+
         SetFileBusy(true);
         try
         {
@@ -117,10 +117,7 @@ public sealed partial class MainWindow
             var path = await DesktopFileDialogs.OpenAsync(this, [".mid", ".midi"], "SignalOpenMidi",
                 _preferences.ReadPickerFolder(PickerFolder.OpenMidi));
             if (path is not null)
-            {
                 await ReadSongAsync(path);
-                WorkspaceTabs.SelectedItem = PianoRollTab;
-            }
         }
         catch (Exception error)
         {
@@ -145,6 +142,9 @@ public sealed partial class MainWindow
 
     private async Task SaveFromMenuAsync(bool saveAs)
     {
+        if (AudioMidiSettingsOpen)
+            return;
+
         SetFileBusy(true);
         try
         {
@@ -199,7 +199,7 @@ public sealed partial class MainWindow
 
         var dialog = new ContentDialog
         {
-            XamlRoot = WorkspaceTabs.XamlRoot,
+            XamlRoot = WorkspaceRoot.XamlRoot,
             Title = "Save changes?",
             Content = $"Save your changes to {SongName} before leaving this song?",
             PrimaryButtonText = "Save",
@@ -223,18 +223,18 @@ public sealed partial class MainWindow
         if (_recording || _finishingTake || _fileBusy)
         {
             args.Cancel = true;
-            if (_recording || _finishingTake)
-                WorkspaceTabs.SelectedIndex = SongCaptureInProgress ? 0 : 1;
+            if (CaptureInProgress && !SongCaptureInProgress)
+                await ShowAudioMidiSettingsAsync();
             return;
         }
         if (!SongIsDirty)
             return;
 
         args.Cancel = true;
-        WorkspaceTabs.SelectedItem = PianoRollTab;
         SetFileBusy(true);
         try
         {
+            await CloseAudioMidiSettingsAsync();
             if (await ConfirmReplaceSongAsync())
             {
                 _allowClose = true;
@@ -281,6 +281,5 @@ public sealed partial class MainWindow
         FileErrorBar.Title = title;
         FileErrorBar.Message = error.Message;
         FileErrorBar.IsOpen = true;
-        WorkspaceTabs.SelectedItem = PianoRollTab;
     }
 }

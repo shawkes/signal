@@ -32,7 +32,7 @@ public sealed partial class MainWindow
             content.Children.Add(last);
             var dialog = new ContentDialog
             {
-                XamlRoot = WorkspaceTabs.XamlRoot,
+                XamlRoot = WorkspaceRoot.XamlRoot,
                 Title = "Crop song",
                 Content = content,
                 PrimaryButtonText = "Crop",
@@ -89,7 +89,7 @@ public sealed partial class MainWindow
         {
             var dialog = new ContentDialog
             {
-                XamlRoot = WorkspaceTabs.XamlRoot,
+                XamlRoot = WorkspaceRoot.XamlRoot,
                 Title = "Undo crop?",
                 Content = "Restore the song as it was before the last crop. This also removes any edits made after that crop.",
                 PrimaryButtonText = "Undo crop",

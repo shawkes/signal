@@ -50,6 +50,9 @@ public sealed partial class MainWindow : Window
         _applicationTitle = applicationTitle;
         _preferences = RecordingPreferences.ForCurrentUser(settingsProfile);
         InitializeComponent();
+        // Retain the dialog and its settings controls when they're outside the editor's visual tree.
+        _audioMidiSettingsDialog = AudioMidiSettingsDialog;
+        WorkspaceRoot.Children.Remove(_audioMidiSettingsDialog);
         OffsetBox.NumberFormatter = new global::Windows.Globalization.NumberFormatting.DecimalFormatter { FractionDigits = 1 };
         _savedRecordingOffset = _preferences.ReadOffset();
         if (_savedRecordingOffset is { } offset)
@@ -71,7 +74,7 @@ public sealed partial class MainWindow : Window
         RollView.PitchPreviewRequested += AuditionKey;
         RollView.ChannelPointEdited += EditChannelPoint;
         RollView.AutomationPointsRequested += ShowAutomationPoints;
-        WorkspaceTabs.Loaded += OnLoaded;
+        WorkspaceRoot.Loaded += OnLoaded;
         AppWindow.Closing += WindowClosing;
         Activated += TransportWindowActivated;
         Closed += OnClosed;
@@ -83,10 +86,10 @@ public sealed partial class MainWindow : Window
 
     private async void OnLoaded(object sender, RoutedEventArgs args)
     {
-        WorkspaceTabs.Loaded -= OnLoaded;
+        WorkspaceRoot.Loaded -= OnLoaded;
         DispatcherQueue.TryEnqueue(DispatcherQueuePriority.Low, () =>
         {
-            if (RollView.IsLoaded && ReferenceEquals(WorkspaceTabs.SelectedItem, PianoRollTab))
+            if (RollView.IsLoaded && !AudioMidiSettingsOpen)
                 RollView.Focus(FocusState.Programmatic);
         });
         RefreshDevices();
@@ -401,14 +404,18 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private void ShowTakeClicked(object sender, RoutedEventArgs args)
+    private async void ShowTakeClicked(object sender, RoutedEventArgs args)
     {
-        WorkspaceTabs.SelectedItem = PianoRollTab;
+        await CloseAudioMidiSettingsAsync();
+        if (_closed)
+            return;
+
         if (_firstImportedNote is { } take)
         {
             SelectTrack(take.Track);
             RollView.RevealTick(take.Note.StartTick, take.Note.NoteNumber);
         }
+        RollView.Focus(FocusState.Programmatic);
     }
 
     private void PlayClicked(object sender, RoutedEventArgs args) => ToggleSongPlayback();
@@ -670,8 +677,7 @@ public sealed partial class MainWindow : Window
         var imported = ShiftNote(first);
         _firstImportedNote = (track, imported);
         _capturedNotes.Clear();
-        if (WorkspaceTabs.SelectedIndex == 0 &&
-            ReferenceEquals(_selectedTrack, track))
+        if (!AudioMidiSettingsOpen && ReferenceEquals(_selectedTrack, track))
             RollView.RevealTick(imported.StartTick, imported.NoteNumber);
 
         SongNote ShiftNote(SongNote note)
@@ -738,9 +744,9 @@ public sealed partial class MainWindow : Window
             _playing ? "Playing song" : _pausedTick.HasValue ? "Paused" :
             CalibrationInProgress ? "Tap test in progress" :
             takeInProgress ? "Recording a test take" :
-            !audioReady ? "Check the audio output in Recording settings" :
+            !audioReady ? "Check the audio output in Settings → Audio & MIDI" :
                 _loadingBank ? "Loading SoundFont…" :
-                _bank is null ? "Load a SoundFont in Recording settings" : "");
+                _bank is null ? "Load a SoundFont in Settings → Audio & MIDI" : "");
         // Reserve one caption line even when the transport has no status to display.
         PlaybackStatusText.Text = status.Length == 0 ? "\u00a0" : status;
     }

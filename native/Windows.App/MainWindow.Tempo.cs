@@ -47,7 +47,7 @@ public sealed partial class MainWindow
             var view = new TempoChangesView(SongTempo);
             var dialog = new ContentDialog
             {
-                XamlRoot = WorkspaceTabs.XamlRoot,
+                XamlRoot = WorkspaceRoot.XamlRoot,
                 Title = "Tempo changes",
                 Content = view,
                 PrimaryButtonText = "Apply",

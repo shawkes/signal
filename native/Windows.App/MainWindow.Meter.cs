@@ -61,7 +61,7 @@ public sealed partial class MainWindow
 
             var dialog = new ContentDialog
             {
-                XamlRoot = WorkspaceTabs.XamlRoot,
+                XamlRoot = WorkspaceRoot.XamlRoot,
                 Title = "Time signatures",
                 Content = content,
                 PrimaryButtonText = "Apply",

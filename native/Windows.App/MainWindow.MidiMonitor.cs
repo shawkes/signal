@@ -35,7 +35,7 @@ public sealed partial class MainWindow
             ? $"Input · {item.Content}"
             : MidiErrorText.Visibility == Visibility.Visible
                 ? MidiErrorText.Text
-                : "Choose a MIDI input in Recording settings.";
+                : "Choose a MIDI input in Settings → Audio & MIDI.";
         monitor.SetInput(label);
     }
 }

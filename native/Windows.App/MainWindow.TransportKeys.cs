@@ -15,7 +15,7 @@ public sealed partial class MainWindow
 
     private void TransportKeyDown(object sender, KeyRoutedEventArgs args)
     {
-        if (args.Handled || !ReferenceEquals(WorkspaceTabs.SelectedItem, PianoRollTab))
+        if (args.Handled || AudioMidiSettingsOpen)
             return;
 
         if (args.Key == VirtualKey.Space)
@@ -33,7 +33,7 @@ public sealed partial class MainWindow
         if (IsTransportModifierDown(VirtualKey.Menu) || (!horizontal && (shift || control)) || (shift && control))
             return;
 
-        for (var element = args.OriginalSource as DependencyObject; element is not null && element != WorkspaceTabs;
+        for (var element = args.OriginalSource as DependencyObject; element is not null && element != WorkspaceRoot;
              element = VisualTreeHelper.GetParent(element))
         {
             if (element is TextBox or RichEditBox or NumberBox or Selector or RangeBase || element == MainMenu)
@@ -69,9 +69,9 @@ public sealed partial class MainWindow
             return;
 
         var focused = args.OriginalSource as DependencyObject;
-        if (focused is null && WorkspaceTabs.XamlRoot is { } root)
+        if (focused is null && WorkspaceRoot.XamlRoot is { } root)
             focused = FocusManager.GetFocusedElement(root) as DependencyObject;
-        for (var element = focused; element is not null && element != WorkspaceTabs;
+        for (var element = focused; element is not null && element != WorkspaceRoot;
              element = VisualTreeHelper.GetParent(element))
         {
             if (element is TextBox or RichEditBox or PasswordBox or NumberBox or
@@ -84,12 +84,6 @@ public sealed partial class MainWindow
         _transportSpaceDown = true;
         if (!args.KeyStatus.WasKeyDown && CanSeek && !RollView.HasActiveGesture)
             ToggleSongPlayback();
-    }
-
-    private void TransportMenuKeyDown(object sender, KeyRoutedEventArgs args)
-    {
-        if (!args.Handled && args.Key == VirtualKey.Space && ReferenceEquals(WorkspaceTabs.SelectedItem, PianoRollTab))
-            HandleTransportSpace(args);
     }
 
     private void TransportKeyUp(object sender, KeyRoutedEventArgs args)

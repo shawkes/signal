@@ -35,7 +35,7 @@ public sealed partial class MainWindow
             options.Children.Add(quality);
             var setup = new ContentDialog
             {
-                XamlRoot = WorkspaceTabs.XamlRoot,
+                XamlRoot = WorkspaceRoot.XamlRoot,
                 Title = "Export Ogg Vorbis",
                 Content = options,
                 PrimaryButtonText = "Choose file…",
@@ -58,7 +58,7 @@ public sealed partial class MainWindow
             using var cancellation = new CancellationTokenSource();
             var dialog = new ContentDialog
             {
-                XamlRoot = WorkspaceTabs.XamlRoot,
+                XamlRoot = WorkspaceRoot.XamlRoot,
                 Title = "Exporting Ogg audio",
                 Content = new ProgressBar { IsIndeterminate = true },
                 CloseButtonText = "Cancel"

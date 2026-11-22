@@ -182,7 +182,7 @@ public sealed partial class MainWindow
             var name = new TextBox { Header = "Track name", Text = track.Name };
             var dialog = new ContentDialog
             {
-                XamlRoot = WorkspaceTabs.XamlRoot,
+                XamlRoot = WorkspaceRoot.XamlRoot,
                 Title = "Rename track",
                 Content = name,
                 PrimaryButtonText = "Rename",
