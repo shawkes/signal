@@ -467,6 +467,33 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    private void RefreshPlaybackNotes()
+    {
+        if (CaptureInProgress || _audioFailed || _engine is not { PlaybackTick: not null } engine ||
+            _playingSong is not { } current)
+            return;
+
+        try
+        {
+            long endTick = _songEndTick;
+            var edited = _trackEditor.SnapshotBackingSong(endTick);
+            var song = new Song(current.TempoMap, edited.Tracks, meterMap: current.MeterMap);
+            if (!engine.UpdateSongPlayback(song, EnabledLoopRange(_loopRange, _loopEnabled, endTick)))
+                return;
+
+            _playingSong = song;
+            _playingSongEndTick = endTick;
+            _playbackError = null;
+            UpdateLoopDisplay();
+            UpdatePlaybackControls();
+        }
+        catch (Exception error) when (error is ArgumentException or InvalidOperationException or OverflowException)
+        {
+            _playbackError = error.Message;
+            UpdatePlaybackControls();
+        }
+    }
+
     private long _cueTick;
     private long? _pausedTick;
     private Song? _playingSong;

@@ -13,8 +13,10 @@ internal sealed class NotePlayback(int sampleRate, MeterMap liveMeter)
     private readonly int _fadeFrames = Math.Max(1, sampleRate / 100);
     private readonly int _loopFadeFrames = Math.Max(1, sampleRate / 500);
     private readonly PlaybackEvent?[] _loopRecoveryHeld = new PlaybackEvent?[Channels * Keys];
+    private readonly bool[] _heldKeys = new bool[Channels * Keys];
     private PlaybackPlan? _requested;
     private PlaybackPlan? _active;
+    private PlaybackTimeline? _renderedTimeline;
     private PlaybackLoop? _loop;
     private IMonitorSynth? _fadingSynth;
     private int _fadeRemaining;
@@ -43,6 +45,29 @@ internal sealed class NotePlayback(int sampleRate, MeterMap liveMeter)
         ArgumentNullException.ThrowIfNull(synth);
         ArgumentOutOfRangeException.ThrowIfNegative(startTick);
         ValidateRange(loop);
+        var events = PrepareEvents(notes, messages, tempo);
+        if (events.Length == 0 && !allowEmpty)
+            return null;
+
+        var timeline = PrepareTimeline(events, tempo, endTick, loop);
+        var plan = new PlaybackPlan(synth, tempo, meterMap ?? liveMeter, timeline)
+        {
+            Tick = loop?.StartTick ?? 0
+        };
+        long position = tempo.TickToSample(startTick, sampleRate);
+        if (timeline.Loop is { } cycle
+            ? position > cycle.StartFrame && position < cycle.EndFrame
+            : position > 0 && position < timeline.EndFrame)
+        {
+            plan.Timeline = timeline with { Seek = new PlaybackSeek(position, PrepareSeekChase(events, position)) };
+            plan.Tick = startTick;
+        }
+        return plan;
+    }
+
+    private PlaybackEvent[] PrepareEvents(IEnumerable<SongNote> notes, IEnumerable<SongChannelMessage> messages,
+        TempoMap tempo)
+    {
         var events = new List<PlaybackEvent>();
         foreach (var note in notes)
         {
@@ -68,9 +93,6 @@ internal sealed class NotePlayback(int sampleRate, MeterMap liveMeter)
             long frame = tempo.TickToSample(message.Tick, sampleRate);
             events.Add(new PlaybackEvent(frame, message.Tick, message.Status, message.Data1, message.Data2, events.Count));
         }
-        if (events.Count == 0 && !allowEmpty)
-            return null;
-
         events.Sort(static (left, right) =>
         {
             int order = left.Frame.CompareTo(right.Frame);
@@ -82,23 +104,14 @@ internal sealed class NotePlayback(int sampleRate, MeterMap liveMeter)
             return order != 0 ? order : left.Order.CompareTo(right.Order);
         });
         MergeOverlappingReleases(events);
-        long endFrame = Math.Max(events.Count == 0 ? 0 : events[^1].Frame, tempo.TickToSample(endTick, sampleRate));
-        long endWithRelease = checked(endFrame + sampleRate);
-        var plan = new PlaybackPlan(synth, tempo, meterMap ?? liveMeter, events.ToArray(), endFrame, endWithRelease);
-        if (loop is { } range)
-        {
-            plan.RequestedLoop = PrepareLoop(plan, range);
-            plan.Tick = range.StartTick;
-        }
-        long position = tempo.TickToSample(startTick, sampleRate);
-        if (plan.RequestedLoop is { } cycle
-            ? position > cycle.StartFrame && position < cycle.EndFrame
-            : position > 0 && position < endFrame)
-        {
-            plan.Seek = new PlaybackSeek(position, PrepareSeekChase(plan.Events, position));
-            plan.Tick = startTick;
-        }
-        return plan;
+        return events.ToArray();
+    }
+
+    private PlaybackTimeline PrepareTimeline(PlaybackEvent[] events, TempoMap tempo, long endTick, LoopRange? loop)
+    {
+        long endFrame = Math.Max(events.Length == 0 ? 0 : events[^1].Frame, tempo.TickToSample(endTick, sampleRate));
+        var cycle = loop is { } range ? PrepareLoop(events, tempo, range) : null;
+        return new PlaybackTimeline(events, endFrame, checked(endFrame + sampleRate), cycle);
     }
 
     public void Request(PlaybackPlan? plan, long? originFrame = null)
@@ -112,14 +125,35 @@ internal sealed class NotePlayback(int sampleRate, MeterMap liveMeter)
     {
         ValidateRange(loop);
         var plan = Volatile.Read(ref _requested);
-        if (plan is null || plan.OriginFrame is not null || Volatile.Read(ref plan.Tick) == Finished ||
-            Volatile.Read(ref plan.RequestedLoop)?.Range == loop)
-        {
+        if (plan is null || plan.OriginFrame is not null || Volatile.Read(ref plan.Tick) == Finished)
             return;
-        }
 
-        var prepared = loop is { } range ? PrepareLoop(plan, range) : null;
-        Volatile.Write(ref plan.RequestedLoop, prepared);
+        var timeline = Volatile.Read(ref plan.Timeline);
+        if (timeline.Loop?.Range == loop)
+            return;
+        var prepared = loop is { } range ? PrepareLoop(timeline.Events, plan.TempoMap, range) : null;
+        Interlocked.CompareExchange(ref plan.Timeline, timeline with { Loop = prepared }, timeline);
+    }
+
+    public bool UpdateTimeline(IEnumerable<SongNote> notes, IEnumerable<SongChannelMessage> messages,
+        long endTick, LoopRange? loop)
+    {
+        ValidateRange(loop);
+        var plan = Volatile.Read(ref _requested);
+        if (plan is null || plan.OriginFrame is not null || Volatile.Read(ref plan.Tick) == Finished)
+            return false;
+
+        var previous = Volatile.Read(ref plan.Timeline);
+        var events = PrepareEvents(notes, messages, plan.TempoMap);
+        var timeline = PrepareTimeline(events, plan.TempoMap, endTick, loop) with
+        {
+            KeyEvents = events.Where(message => message.Command is 0x80 or 0x90)
+                .GroupBy(KeyIndex).ToDictionary(group => group.Key, group => group.ToArray()),
+            Seek = previous.Seek is { Frame: var frame } ? new PlaybackSeek(frame, PrepareSeekChase(events, frame)) : null
+        };
+        if (!ReferenceEquals(Volatile.Read(ref _requested), plan) || Volatile.Read(ref plan.Tick) == Finished)
+            return false;
+        return ReferenceEquals(Interlocked.CompareExchange(ref plan.Timeline, timeline, previous), previous);
     }
 
     public void Stop() => Volatile.Write(ref _requested, null);
@@ -128,7 +162,10 @@ internal sealed class NotePlayback(int sampleRate, MeterMap liveMeter)
         MetronomeMixer? mixPreview = null)
     {
         var requested = Volatile.Read(ref _requested);
+        var timeline = requested is null ? null : Volatile.Read(ref requested.Timeline);
         bool restarting = !ReferenceEquals(requested, _active);
+        bool edited = !restarting && !ReferenceEquals(_renderedTimeline?.Events, timeline?.Events);
+        _renderedTimeline = timeline;
         if (restarting)
         {
             if (_active is { } previous)
@@ -142,13 +179,14 @@ internal sealed class NotePlayback(int sampleRate, MeterMap liveMeter)
             _startFrame = requested?.OriginFrame ?? firstFrame;
             _firstAllowedOnset = 0;
             _nextEvent = 0;
-            if (requested?.Seek is { } seek)
+            Array.Clear(_heldKeys);
+            if (requested is not null && timeline?.Seek is { } seek)
             {
                 foreach (var message in seek.Chase)
-                    requested.Synth.ProcessMidi(message.Status, message.Data1, message.Data2);
+                    PlayMessage(requested.Synth, message);
                 _startFrame = firstFrame - seek.Frame;
                 _firstAllowedOnset = seek.Frame;
-                _nextEvent = FirstAtOrAfter(requested.Events, seek.Frame);
+                _nextEvent = FirstAtOrAfter(timeline.Events, seek.Frame);
             }
         }
 
@@ -161,7 +199,7 @@ internal sealed class NotePlayback(int sampleRate, MeterMap liveMeter)
                 _fadingSynth = null;
         }
 
-        if (_active is not { } active)
+        if (_active is not { } active || timeline is null)
         {
             mixPreview?.Invoke(output, firstFrame, liveTempo, liveMeter, 0);
             return;
@@ -170,20 +208,31 @@ internal sealed class NotePlayback(int sampleRate, MeterMap liveMeter)
         if (firstFrame < _startFrame)
             return;
 
-        ApplyLoopChange(active, firstFrame, restarting);
+        ApplyLoopChange(active, timeline, firstFrame, restarting);
+        if (edited)
+        {
+            long position = firstFrame - _startFrame;
+            _nextEvent = FirstAtOrAfter(_loop?.Events ?? timeline.Events, position);
+            if (_loop is not { } cycle || position < cycle.EndFrame)
+                ReleaseMissingNotes(active.Synth, timeline.KeyEvents!, position);
+        }
         if (_loop is { } loop)
             RenderLoop(output, firstFrame, active, loop, mixMetronome);
         else
-            RenderSong(output, firstFrame, active, mixMetronome);
+            RenderSong(output, firstFrame, active, timeline, mixMetronome);
     }
 
-    private void ApplyLoopChange(PlaybackPlan active, long firstFrame, bool restarting)
+    private void ApplyLoopChange(PlaybackPlan active, PlaybackTimeline timeline, long firstFrame, bool restarting)
     {
-        var next = Volatile.Read(ref active.RequestedLoop);
+        var next = timeline.Loop;
         if (ReferenceEquals(next, _loop))
             return;
 
+        bool sameRange = next?.Range == _loop?.Range;
         _loop = next;
+        if (sameRange)
+            return;
+
         _nextLoopFrame = null;
         long position = firstFrame - _startFrame;
         if (next is { } anchoredLoop && active.OriginFrame is long origin)
@@ -192,13 +241,13 @@ internal sealed class NotePlayback(int sampleRate, MeterMap liveMeter)
             SeekLoop(active, anchoredLoop, firstFrame, anchoredLoop.PositionAt(firstFrame - origin));
         }
         else if (next is { } loop &&
-            ((restarting && active.Seek is null) || position < loop.StartFrame || position >= loop.EndFrame))
+            ((restarting && timeline.Seek is null) || position < loop.StartFrame || position >= loop.EndFrame))
         {
             SeekLoop(active, loop, firstFrame, loop.StartFrame);
         }
         else
         {
-            _nextEvent = FirstAtOrAfter(next?.Events ?? active.Events, position);
+            _nextEvent = FirstAtOrAfter(next?.Events ?? timeline.Events, position);
         }
     }
 
@@ -239,12 +288,13 @@ internal sealed class NotePlayback(int sampleRate, MeterMap liveMeter)
     private void SeekLoop(PlaybackPlan active, PlaybackLoop loop, long firstFrame, long position)
     {
         active.Synth.Reset();
+        Array.Clear(_heldKeys);
         _startFrame = firstFrame - position;
         _firstAllowedOnset = loop.StartFrame;
         if (position == loop.StartFrame)
         {
             foreach (var message in loop.Chase)
-                active.Synth.ProcessMidi(message.Status, message.Data1, message.Data2);
+                PlayMessage(active.Synth, message);
             _nextEvent = 0;
             return;
         }
@@ -262,7 +312,7 @@ internal sealed class NotePlayback(int sampleRate, MeterMap liveMeter)
         foreach (var held in _loopRecoveryHeld)
         {
             if (held is { } message)
-                active.Synth.ProcessMidi(message.Status, message.Data1, message.Data2);
+                PlayMessage(active.Synth, message);
         }
 
         void RecoverMessage(PlaybackEvent message)
@@ -278,32 +328,32 @@ internal sealed class NotePlayback(int sampleRate, MeterMap liveMeter)
             {
                 ClearHeldAtBoundary(message, _loopRecoveryHeld);
                 if (message.Command != 0x80)
-                    active.Synth.ProcessMidi(message.Status, message.Data1, message.Data2);
+                    PlayMessage(active.Synth, message);
             }
         }
     }
 
-    private void RenderSong(Span<float> output, long firstFrame, PlaybackPlan active,
+    private void RenderSong(Span<float> output, long firstFrame, PlaybackPlan active, PlaybackTimeline timeline,
         MetronomeMixer? mixMetronome)
     {
         long relativeFirst = firstFrame - _startFrame;
-        long relativeEnd = Math.Min(relativeFirst + output.Length / 2, active.EndWithRelease);
+        long relativeEnd = Math.Min(relativeFirst + output.Length / 2, timeline.EndWithRelease);
         if (relativeFirst < relativeEnd)
         {
             int length = (int)((relativeEnd - relativeFirst) * 2);
-            RenderEvents(active.Synth, active.Events, output[..length], relativeFirst, active.EndWithRelease, _fadeFrames);
+            RenderEvents(active.Synth, timeline.Events, output[..length], relativeFirst, timeline.EndWithRelease, _fadeFrames);
         }
-        if (mixMetronome is not null && relativeFirst < active.EndFrame)
+        if (mixMetronome is not null && relativeFirst < timeline.EndFrame)
         {
-            int clickFrames = (int)Math.Min(output.Length / 2, active.EndFrame - relativeFirst);
+            int clickFrames = (int)Math.Min(output.Length / 2, timeline.EndFrame - relativeFirst);
             mixMetronome(output[..(2 * clickFrames)], relativeFirst, active.TempoMap, active.MeterMap, _firstAllowedOnset);
         }
 
-        long tick = _nextEvent == active.Events.Length && relativeEnd >= active.EndFrame
+        long tick = _nextEvent == timeline.Events.Length && relativeEnd >= timeline.EndFrame
             ? Finished
             : (long)active.TempoMap.SampleToTick(relativeEnd, sampleRate);
         Volatile.Write(ref active.Tick, tick);
-        if (relativeEnd >= active.EndWithRelease)
+        if (relativeEnd >= timeline.EndWithRelease)
         {
             Interlocked.CompareExchange(ref _requested, null, active);
             _active = null;
@@ -323,12 +373,40 @@ internal sealed class NotePlayback(int sampleRate, MeterMap liveMeter)
                 Mix(synth, output[BufferIndex(cursor)..BufferIndex(message.Frame)], fadeEnd - cursor, fadeFrames);
                 cursor = message.Frame;
             }
-            synth.ProcessMidi(message.Status, message.Data1, message.Data2);
+            PlayMessage(synth, message);
         }
         if (cursor < endFrame)
             Mix(synth, output[BufferIndex(cursor)..], fadeEnd - cursor, fadeFrames);
 
         int BufferIndex(long frame) => (int)((frame - firstFrame) * 2);
+    }
+
+    private static int KeyIndex(PlaybackEvent message) => (message.Status & 0x0f) * Keys + message.Data1;
+
+    private void PlayMessage(IMonitorSynth synth, PlaybackEvent message)
+    {
+        if (message.Command is 0x80 or 0x90)
+            _heldKeys[KeyIndex(message)] = message.Command == 0x90;
+        else if (message.Command == 0xb0 && message.Data1 is 120 or 123)
+            Array.Clear(_heldKeys, (message.Status & 0x0f) * Keys, Keys);
+        synth.ProcessMidi(message.Status, message.Data1, message.Data2);
+    }
+
+    private void ReleaseMissingNotes(IMonitorSynth synth, Dictionary<int, PlaybackEvent[]> keyEvents, long position)
+    {
+        for (int key = 0; key < _heldKeys.Length; key++)
+        {
+            if (!_heldKeys[key])
+                continue;
+            if (keyEvents.TryGetValue(key, out var events))
+            {
+                int index = FirstAtOrAfter(events, position);
+                if (index > 0 && events[index - 1].Command == 0x90)
+                    continue;
+            }
+            _heldKeys[key] = false;
+            synth.ProcessMidi((byte)(0x80 | (key / Keys)), (byte)(key % Keys), 0);
+        }
     }
 
     private void Mix(IMonitorSynth synth, Span<float> destination, long framesToFadeEnd, int fadeFrames)
@@ -349,17 +427,17 @@ internal sealed class NotePlayback(int sampleRate, MeterMap liveMeter)
         }
     }
 
-    private PlaybackLoop PrepareLoop(PlaybackPlan plan, LoopRange range)
+    private PlaybackLoop PrepareLoop(PlaybackEvent[] timeline, TempoMap tempo, LoopRange range)
     {
-        long start = plan.TempoMap.TickToSample(range.StartTick, sampleRate);
-        long end = plan.TempoMap.TickToSample(range.EndTick, sampleRate);
+        long start = tempo.TickToSample(range.StartTick, sampleRate);
+        long end = tempo.TickToSample(range.EndTick, sampleRate);
         if (end <= start)
             throw new ArgumentOutOfRangeException(nameof(range), "The loop must span at least one audio sample.");
 
         var events = new List<PlaybackEvent>();
         var held = new PlaybackEvent?[Channels * Keys];
         var setup = new Dictionary<(byte Status, byte Key), PlaybackEvent>();
-        foreach (var message in plan.Events)
+        foreach (var message in timeline)
         {
             if (message.Tick < range.StartTick)
             {
@@ -480,20 +558,21 @@ internal sealed class NotePlayback(int sampleRate, MeterMap liveMeter)
         events.RemoveRange(written, events.Count - written);
     }
 
-    internal sealed class PlaybackPlan(
-        IMonitorSynth synth, TempoMap tempoMap, MeterMap meterMap, PlaybackEvent[] events, long endFrame, long endWithRelease)
+    internal sealed class PlaybackPlan(IMonitorSynth synth, TempoMap tempoMap, MeterMap meterMap, PlaybackTimeline timeline)
     {
         public IMonitorSynth Synth { get; } = synth;
         public TempoMap TempoMap { get; } = tempoMap;
         public MeterMap MeterMap { get; } = meterMap;
-        public PlaybackEvent[] Events { get; } = events;
-        public long EndFrame { get; } = endFrame;
-        public long EndWithRelease { get; } = endWithRelease;
-        public PlaybackLoop? RequestedLoop;
-        public PlaybackSeek? Seek;
+        public PlaybackTimeline Timeline = timeline;
         public OverdubReplay? Overdub;
         public long? OriginFrame;
         public long Tick;
+    }
+
+    internal sealed record PlaybackTimeline(PlaybackEvent[] Events, long EndFrame, long EndWithRelease, PlaybackLoop? Loop)
+    {
+        public PlaybackSeek? Seek { get; init; }
+        public Dictionary<int, PlaybackEvent[]>? KeyEvents { get; init; }
     }
 
     internal sealed record PlaybackSeek(long Frame, PlaybackEvent[] Chase);

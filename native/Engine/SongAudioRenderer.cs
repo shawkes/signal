@@ -16,7 +16,7 @@ public sealed class SongAudioRenderer
         var plan = _playback.Prepare(song.Tracks.SelectMany(track => track.Notes),
             song.Tracks.SelectMany(track => track.PlaybackMessages), _tempo, synth, endTick,
             meterMap: song.MeterMap, allowEmpty: true)!;
-        FrameCount = plan.EndWithRelease;
+        FrameCount = plan.Timeline.EndWithRelease;
         _playback.Request(plan);
     }
 

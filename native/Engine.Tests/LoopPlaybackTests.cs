@@ -69,6 +69,55 @@ public sealed class LoopPlaybackTests
     }
 
     [Fact]
+    public void NoteEditsUpdateTheRunningLoopWithoutRestartingThePass()
+    {
+        var engine = Create();
+        var synth = new EventSynth();
+        var editor = new SongTrackEditor(new Song(engine.TempoMap,
+            [new SongTrack("Piano", [new(0, 11, 0, 60, 95), new(6, 2, 0, 64, 95), new(2, 8, 0, 65, 95)])]));
+        var loop = new LoopRange(0, 12);
+        var document = editor.Tracks[0].Document;
+        var removed = document.Notes[0];
+        var moved = document.Notes[1];
+        Assert.True(engine.PlaySong(editor.SnapshotBackingSong(12), synth, loop));
+        editor.NotesEdited += () => Assert.True(engine.UpdateSongPlayback(editor.SnapshotBackingSong(12), loop));
+
+        Render(engine, Origin, 175);
+        document.Delete(removed.Id);
+        document.Move(moved.Id, 8, 72);
+        document.AddRange([new(5, 1, 0, 71, 95), new(1, 1, 0, 57, 95)]);
+        Render(engine, Origin + 175, 535);
+
+        Assert.Equal([0, 600], synth.Resets);
+        Assert.Equal(2, engine.PlaybackTick);
+        Assert.Contains(new ReceivedMessage(175, 0x80, 60, 0), synth.Messages);
+        Assert.DoesNotContain(synth.Messages, message => message.Status == 0x90 && message.Key == 64);
+        Assert.Equal(100, Assert.Single(synth.Messages,
+            message => message.Frame < 600 && message.Status == 0x90 && message.Key == 65).Frame);
+        Assert.Contains(new ReceivedMessage(250, 0x90, 71, 95), synth.Messages);
+        Assert.Contains(new ReceivedMessage(400, 0x90, 72, 95), synth.Messages);
+        Assert.Equal(650, Assert.Single(synth.Messages, message => message.Status == 0x90 && message.Key == 57).Frame);
+    }
+
+    [Fact]
+    public void NoteEditsExtendLinearPlaybackOnItsOriginalClock()
+    {
+        var engine = Create();
+        var synth = new EventSynth();
+        var lead = new SongNote(0, 4, 0, 60, 95);
+        var added = new SongNote(6, 1, 0, 64, 80);
+        Assert.True(engine.PlaySong(new Song(engine.TempoMap, [new SongTrack("Piano", [lead])]), synth));
+        Render(engine, Origin, 175);
+        Assert.True(engine.UpdateSongPlayback(new Song(engine.TempoMap, [new SongTrack("Piano", [lead, added])]), loop: null));
+        Render(engine, Origin + 175, 150);
+
+        Assert.Empty(synth.Resets);
+        Assert.Contains(new ReceivedMessage(200, 0x80, 60, 0), synth.Messages);
+        Assert.Contains(new ReceivedMessage(300, 0x90, 64, 80), synth.Messages);
+        Assert.Equal(6, engine.PlaybackTick);
+    }
+
+    [Fact]
     public void EnablingOutsideTheRangeSeeksAndTurningOffContinuesFromTheLoopPosition()
     {
         var engine = Create();

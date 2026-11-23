@@ -88,6 +88,7 @@ public sealed class SongTrackEditor
         || _tracks.Any(track => track.Document.Revision != track.SavedNoteRevision);
 
     public event Action? Changed;
+    public event Action? NotesEdited;
     public event Action? TracksChanged;
 
     public Song SnapshotSong() => new(TempoMap, _tracks.Select(track =>
@@ -497,5 +498,9 @@ public sealed class SongTrackEditor
         Changed?.Invoke();
     }
 
-    private void NotesChanged() => Changed?.Invoke();
+    private void NotesChanged()
+    {
+        Changed?.Invoke();
+        NotesEdited?.Invoke();
+    }
 }

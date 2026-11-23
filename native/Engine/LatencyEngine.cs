@@ -147,6 +147,16 @@ public sealed class LatencyEngine
             song.TempoMap, playbackSynth, SongEndTick(song), loop, song.MeterMap, allowEmpty: allowSilent, startTick: startTick));
     }
 
+    /// <summary>Queues edited events for the current playback without changing its clock or synth.</summary>
+    public bool UpdateSongPlayback(Song song, LoopRange? loop)
+    {
+        ArgumentNullException.ThrowIfNull(song);
+        return Volatile.Read(ref _songTake) is null && _playback.UpdateTimeline(
+            song.Tracks.SelectMany(track => track.Notes),
+            song.Tracks.SelectMany(track => track.PlaybackMessages),
+            SongEndTick(song), loop);
+    }
+
     /// <summary>Records from bar one or the selected loop, optionally counting in once.</summary>
     public long RecordSong(Song song, IMonitorSynth playbackSynth, bool countIn,
         double offsetMilliseconds, int quantizationDivision = 0, long? timestamp = null,
@@ -158,7 +168,7 @@ public sealed class LatencyEngine
             song.Tracks.SelectMany(track => track.Notes),
             song.Tracks.SelectMany(track => track.PlaybackMessages),
             song.TempoMap, playbackSynth, SongEndTick(song), loop, song.MeterMap, allowEmpty: loop.HasValue);
-        var preparedLoop = backing?.RequestedLoop;
+        var preparedLoop = backing?.Timeline.Loop;
         OverdubReplay? replay = null;
         if (backing is not null && preparedLoop is { } range && overdubSynth is not null)
         {
