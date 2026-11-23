@@ -5,7 +5,7 @@ using SkiaSharp;
 using Uno.WinUI.Graphics2DSK;
 using Windows.Foundation;
 
-namespace Signal.Native.Windows.App.PianoRoll;
+namespace Signal.Native.Uno.App.PianoRoll;
 
 public sealed partial class PianoRollView
 {

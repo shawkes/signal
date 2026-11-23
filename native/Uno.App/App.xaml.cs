@@ -1,9 +1,8 @@
 using Microsoft.UI.Xaml;
-using Signal.Native.Windows.App;
 
 namespace Signal.Native.Uno.App;
 
-public partial class App : Application
+public partial class App : Microsoft.UI.Xaml.Application
 {
     private MainWindow? _window;
 
@@ -12,8 +11,7 @@ public partial class App : Application
     protected override void OnLaunched(LaunchActivatedEventArgs args)
     {
         string[] arguments = Environment.GetCommandLineArgs();
-        _window = new MainWindow(arguments.Length == 2 ? arguments[1] : null,
-            applicationTitle: "Signal Uno", settingsProfile: "Signal Uno");
+        _window = new MainWindow(arguments.Length == 2 ? arguments[1] : null);
         _window.Activate();
     }
 }

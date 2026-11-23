@@ -1,4 +1,6 @@
 <Solution>
+  <Project Path="Application/Signal.Native.Application.csproj" />
+  <Project Path="Desktop.Devices/Signal.Native.Desktop.Devices.csproj" />
   <Project Path="Engine/Signal.Native.Engine.csproj" />
   <Project Path="Engine.Tests/Signal.Native.Engine.Tests.csproj" />
   <Project Path="MidiFiles/Signal.Native.MidiFiles.csproj" />

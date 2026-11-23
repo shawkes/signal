@@ -26,5 +26,5 @@ jobs:
           dotnet-version: 10.0.x
       - name: Build the Uno desktop solution
         run: dotnet build native/Signal.Native.Uno.slnx --configuration Release
-      - name: Run engine and MIDI file tests
+      - name: Run desktop solution tests
         run: dotnet test native/Signal.Native.Uno.slnx --configuration Release --no-build --no-restore

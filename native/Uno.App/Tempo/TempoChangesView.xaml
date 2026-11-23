@@ -1,0 +1,42 @@
+<UserControl
+    x:Class="Signal.Native.Uno.App.Tempo.TempoChangesView"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    MinWidth="420">
+    <StackPanel Spacing="12">
+        <TextBlock Text="Select a tempo point to edit it, or enter a new position and tempo to add one."
+                   TextWrapping="Wrap" />
+        <ListView x:Name="TempoList" Height="196" SelectionMode="Single"
+                  AutomationProperties.Name="Song tempo points" SelectionChanged="TempoSelected">
+            <ListView.ItemTemplate>
+                <DataTemplate>
+                    <TextBlock Text="{Binding Label}" Margin="0,5" />
+                </DataTemplate>
+            </ListView.ItemTemplate>
+        </ListView>
+        <Grid ColumnSpacing="10">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <TextBox x:Name="BeatBox" Header="Beat (quarter notes)" TextChanged="ValueChanged"
+                     ToolTipService.ToolTip="Beat 1 is the song start. Each beat is one quarter note." />
+            <TextBox x:Name="TickBox" Grid.Column="1" Header="Tick within beat" TextChanged="ValueChanged" />
+            <TextBox x:Name="BpmBox" Grid.Column="2" Header="BPM" TextChanged="ValueChanged" />
+        </Grid>
+        <TextBlock x:Name="PositionHint" TextWrapping="Wrap"
+                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                   Style="{StaticResource CaptionTextBlockStyle}" />
+        <TextBlock x:Name="ValidationText" TextWrapping="Wrap"
+                   Foreground="{ThemeResource SystemFillColorCriticalBrush}"
+                   AutomationProperties.LiveSetting="Polite" />
+        <StackPanel Orientation="Horizontal" Spacing="8">
+            <Button x:Name="AddButton" Content="Add" Click="AddClicked" />
+            <Button x:Name="UpdateButton" Content="Update selected" Click="UpdateClicked" />
+            <Button x:Name="RemoveButton" Content="Remove" Click="RemoveClicked" />
+        </StackPanel>
+        <Button x:Name="RemoveLaterButton" Content="Remove later tempos" Click="RemoveLaterClicked"
+                ToolTipService.ToolTip="Keep the opening tempo for the entire song. Changes take effect when you click Apply." />
+    </StackPanel>
+</UserControl>

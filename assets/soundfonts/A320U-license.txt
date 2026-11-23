@@ -2,5 +2,5 @@ A320U SoundFont
 Copyright 2005 by Milton Paredes
 Released under the GNU General Public License, version 2. See GPL-2.0.txt.
 
-The bundled A320U.sf2 and A320U_drums.sf2 are the copies from ryohey's signal.
+The bundled A320U.sf2 is the copy from ryohey's signal.
 https://github.com/ryohey/signal/tree/6959f356c7b6d98a86d6526fcf555bcaff2c6c38/public

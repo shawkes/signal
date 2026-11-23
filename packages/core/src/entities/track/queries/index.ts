@@ -1,5 +1,0 @@
-export * from "./composed"
-export * from "./note"
-export * from "./primitives"
-export * from "./program"
-export * from "./type"

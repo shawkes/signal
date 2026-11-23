@@ -21,11 +21,11 @@ See the [desktop guide](native/Uno.App/README.md) for Linux system dependencies,
 dotnet test native/Signal.Native.Uno.slnx -c Release --no-build --no-restore
 ```
 
-The [desktop CI workflow](.github/workflows/desktop.yml) builds the Uno app and runs the engine and MIDI file tests on Windows, Linux, and macOS. Audio devices, MIDI controllers, and desktop interaction are checked manually.
+The [desktop CI workflow](.github/workflows/desktop.yml) builds the solution and runs the automated tests on Windows, Linux, and macOS. Audio devices, MIDI controllers, and desktop interaction are checked manually.
 
 ## Project structure
 
-The [Uno app](native/Uno.App) uses Skia for the piano roll, PortAudio for audio output, and RtMidi for live MIDI input. The shared C# projects use DryWetMIDI for MIDI files and MeltySynth for SoundFont playback. The [native development notes](native/README.md) cover the sequencing engine and Windows fallback. The original web and Electron projects remain in the repository during the desktop transition.
+The [Uno frontend](native/Uno.App) owns the windows, piano roll, and file pickers. The song session, editing engine, MIDI and SoundFont support, and desktop device adapters live in reusable .NET libraries. See the [project boundaries](ARCHITECTURE.md).
 
 ## Credits and licenses
 

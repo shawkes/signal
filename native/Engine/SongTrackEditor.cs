@@ -95,6 +95,29 @@ public sealed class SongTrackEditor
 
     public int?[] CreateSourceIndices() => _tracks.Select(track => track.SourceIndex).ToArray();
 
+    public long GetTimelineEndTick()
+    {
+        long endTick = 0;
+        foreach (var track in _tracks)
+        {
+            endTick = Math.Max(endTick, track.EndTick);
+            foreach (var item in track.Document.Notes)
+            {
+                var note = item.Note;
+                long noteEnd = note.StartTick + note.LengthTicks;
+                if (note.LengthTicks == 0 && noteEnd < long.MaxValue)
+                    noteEnd++;
+                endTick = Math.Max(endTick, noteEnd);
+            }
+            foreach (var message in track.PlaybackMessages)
+            {
+                if (message.Tick > 0)
+                    endTick = Math.Max(endTick, long.CreateSaturating((Int128)message.Tick + 1));
+            }
+        }
+        return Song.IncludeTimingMarkers(endTick, TempoMap, MeterMap);
+    }
+
     public void MarkSaved()
     {
         _unsavedCrop = false;
