@@ -2,6 +2,7 @@ using System.Globalization;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Signal.Native.Engine;
+using Signal.Native.Uno.App.Controls;
 
 namespace Signal.Native.Uno.App.Tempo;
 
@@ -20,6 +21,10 @@ public sealed partial class TempoChangesView : UserControl
         _ticksPerQuarter = map.TicksPerQuarter;
         _changes = map.Changes.ToList();
         InitializeComponent();
+        decimal lastBeat = Math.Min(long.MaxValue, (decimal)(long.MaxValue / _ticksPerQuarter) + 1);
+        NumericScrub.Attach(BeatEntry, BeatBox, () => new(1, lastBeat, 1));
+        NumericScrub.Attach(TickEntry, TickBox, () => new(0, _ticksPerQuarter - 1));
+        NumericScrub.Attach(BpmEntry, BpmBox, () => new(3.577m, 60_000_000, 120), fractional: true);
         PositionHint.Text = $"Positions start at beat 1, tick 0. Each quarter-note beat has {_ticksPerQuarter} ticks. " +
             "The opening tempo stays at beat 1. Apply updates playback and MIDI save.";
         RefreshPoints(0);

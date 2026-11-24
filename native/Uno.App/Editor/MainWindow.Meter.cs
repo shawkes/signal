@@ -2,6 +2,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 using Signal.Native.Engine;
+using Signal.Native.Uno.App.Controls;
 
 namespace Signal.Native.Uno.App;
 
@@ -41,20 +42,23 @@ public sealed partial class MainWindow
             }
             point.Items.Add("Add at a later bar…");
             var start = new TextBox { Header = "Starting bar" };
-            var beats = new TextBox { Header = "Beats per bar", Width = 132 };
+            var beats = new TextBox { Header = "Beats per bar" };
+            var startEntry = NumericScrub.Wrap(start, () => new(2, map.PositionAt(long.MaxValue - 1).Bar, 2));
+            var beatsEntry = NumericScrub.Wrap(beats, () => new(1, 255, 4));
+            beatsEntry.Width = 132;
             var unit = new ComboBox { Header = "Beat unit", Width = 132 };
             int[] denominators = [1, 2, 4, 8, 16, 32, 64, 128];
             foreach (int value in denominators)
                 unit.Items.Add($"1/{value}");
 
             var fields = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 12 };
-            fields.Children.Add(beats);
+            fields.Children.Add(beatsEntry);
             fields.Children.Add(unit);
             var undo = new Button { Content = "Undo time signature edit", IsEnabled = _trackEditor.CanUndoMeterEdit };
             var error = new TextBlock { TextWrapping = TextWrapping.Wrap };
             var content = new StackPanel { Spacing = 12, MinWidth = 280 };
             content.Children.Add(point);
-            content.Children.Add(start);
+            content.Children.Add(startEntry);
             content.Children.Add(fields);
             content.Children.Add(error);
             content.Children.Add(undo);
@@ -106,7 +110,7 @@ public sealed partial class MainWindow
             {
                 bool add = IsAdding();
                 var change = map.Changes[add ? map.Changes.Count - 1 : point.SelectedIndex];
-                start.Visibility = add ? Visibility.Visible : Visibility.Collapsed;
+                startEntry.Visibility = add ? Visibility.Visible : Visibility.Collapsed;
                 start.Text = ((Int128)map.PositionAt(change.Tick).Bar + (add ? 1 : 0)).ToString();
                 beats.Text = change.Meter.Numerator.ToString();
                 unit.SelectedIndex = Array.IndexOf(denominators, change.Meter.Denominator);

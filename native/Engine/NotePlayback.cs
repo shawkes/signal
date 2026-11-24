@@ -111,7 +111,7 @@ internal sealed class NotePlayback(int sampleRate, MeterMap liveMeter)
     {
         long endFrame = Math.Max(events.Length == 0 ? 0 : events[^1].Frame, tempo.TickToSample(endTick, sampleRate));
         var cycle = loop is { } range ? PrepareLoop(events, tempo, range) : null;
-        return new PlaybackTimeline(events, endFrame, checked(endFrame + sampleRate), cycle);
+        return new PlaybackTimeline(events, endFrame, checked(endFrame + sampleRate), cycle, GetOpeningSounds(events));
     }
 
     public void Request(PlaybackPlan? plan, long? originFrame = null)
@@ -163,8 +163,9 @@ internal sealed class NotePlayback(int sampleRate, MeterMap liveMeter)
     {
         var requested = Volatile.Read(ref _requested);
         var timeline = requested is null ? null : Volatile.Read(ref requested.Timeline);
+        var previousTimeline = _renderedTimeline;
         bool restarting = !ReferenceEquals(requested, _active);
-        bool edited = !restarting && !ReferenceEquals(_renderedTimeline?.Events, timeline?.Events);
+        bool edited = !restarting && !ReferenceEquals(previousTimeline?.Events, timeline?.Events);
         _renderedTimeline = timeline;
         if (restarting)
         {
@@ -214,7 +215,10 @@ internal sealed class NotePlayback(int sampleRate, MeterMap liveMeter)
             long position = firstFrame - _startFrame;
             _nextEvent = FirstAtOrAfter(_loop?.Events ?? timeline.Events, position);
             if (_loop is not { } cycle || position < cycle.EndFrame)
+            {
                 ReleaseMissingNotes(active.Synth, timeline.KeyEvents!, position);
+                ApplyOpeningSoundEdits(active.Synth, previousTimeline!.OpeningSounds, timeline.OpeningSounds);
+            }
         }
         if (_loop is { } loop)
             RenderLoop(output, firstFrame, active, loop, mixMetronome);
@@ -409,6 +413,40 @@ internal sealed class NotePlayback(int sampleRate, MeterMap liveMeter)
         }
     }
 
+    private static ChannelSound[] GetOpeningSounds(PlaybackEvent[] events)
+    {
+        var sounds = new ChannelSound[Channels];
+        foreach (var message in events)
+        {
+            if (message.Tick != 0)
+                break;
+            ref var sound = ref sounds[message.Status & 0x0f];
+            switch (message.Command)
+            {
+                case 0xb0 when message.Data1 == 0: sound = sound with { BankMsb = message.Data2 }; break;
+                case 0xb0 when message.Data1 == 32: sound = sound with { BankLsb = message.Data2 }; break;
+                case 0xc0: sound = sound with { Program = message.Data1 }; break;
+            }
+        }
+        return sounds;
+    }
+
+    private static void ApplyOpeningSoundEdits(IMonitorSynth synth, ChannelSound[] previous, ChannelSound[] current)
+    {
+        // The edited opening events have already passed on this playthrough. Apply the
+        // changed patch for future attacks without touching the channel's sounding voices.
+        for (int channel = 0; channel < Channels; channel++)
+        {
+            var sound = current[channel];
+            if (sound == previous[channel])
+                continue;
+
+            synth.ProcessMidi((byte)(0xb0 | channel), 0, sound.BankMsb);
+            synth.ProcessMidi((byte)(0xb0 | channel), 32, sound.BankLsb);
+            synth.ProcessMidi((byte)(0xc0 | channel), sound.Program, 0);
+        }
+    }
+
     private void Mix(IMonitorSynth synth, Span<float> destination, long framesToFadeEnd, int fadeFrames)
     {
         while (!destination.IsEmpty)
@@ -419,8 +457,8 @@ internal sealed class NotePlayback(int sampleRate, MeterMap liveMeter)
             for (int index = 0; index < length; index += 2)
             {
                 float gain = framesToFadeEnd >= fadeFrames ? 1f : framesToFadeEnd / (float)fadeFrames;
-                destination[index] = Math.Clamp(destination[index] + samples[index] * gain, -1f, 1f);
-                destination[index + 1] = Math.Clamp(destination[index + 1] + samples[index + 1] * gain, -1f, 1f);
+                destination[index] += samples[index] * gain;
+                destination[index + 1] += samples[index + 1] * gain;
                 framesToFadeEnd--;
             }
             destination = destination[length..];
@@ -569,13 +607,16 @@ internal sealed class NotePlayback(int sampleRate, MeterMap liveMeter)
         public long Tick;
     }
 
-    internal sealed record PlaybackTimeline(PlaybackEvent[] Events, long EndFrame, long EndWithRelease, PlaybackLoop? Loop)
+    internal sealed record PlaybackTimeline(PlaybackEvent[] Events, long EndFrame, long EndWithRelease, PlaybackLoop? Loop,
+        ChannelSound[] OpeningSounds)
     {
         public PlaybackSeek? Seek { get; init; }
         public Dictionary<int, PlaybackEvent[]>? KeyEvents { get; init; }
     }
 
     internal sealed record PlaybackSeek(long Frame, PlaybackEvent[] Chase);
+
+    internal readonly record struct ChannelSound(byte BankMsb, byte BankLsb, byte Program);
 
     internal sealed record PlaybackLoop(LoopRange Range, long StartFrame, long EndFrame,
         PlaybackEvent[] Events, PlaybackEvent[] Chase)

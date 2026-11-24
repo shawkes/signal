@@ -135,8 +135,8 @@ internal sealed class OverdubReplay(
             for (int index = 0; index < length; index += 2, position++)
             {
                 float gain = Math.Min(1, (loopEndFrame - position) / (float)_fadeFrames);
-                output[index] = Math.Clamp(output[index] + scratch[index] * gain, -1, 1);
-                output[index + 1] = Math.Clamp(output[index + 1] + scratch[index + 1] * gain, -1, 1);
+                output[index] += scratch[index] * gain;
+                output[index + 1] += scratch[index + 1] * gain;
             }
             output = output[length..];
         }

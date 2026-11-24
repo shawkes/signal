@@ -6,6 +6,7 @@ using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Shapes;
 using Signal.Native.Engine;
+using Signal.Native.Uno.App.Appearance;
 using Windows.Foundation;
 using Windows.System;
 using Windows.UI.Core;
@@ -45,12 +46,13 @@ public sealed partial class PianoRollView : UserControl
     private readonly TranslateTransform _rulerCursorOffset = new();
     private readonly TranslateTransform _timelineOffset = new();
     private readonly RectangleGeometry _timelineClip = new();
-    private (double Left, double Right, int Resolution, MeterMap Meter, Palette Colors)? _paintedRuler;
+    private (double Left, double Right, int Resolution, MeterMap Meter, PianoRollPalette Colors)? _paintedRuler;
     private (double Left, double Width)? _rulerViewport;
-    private (double Top, double Height, bool Drums, Palette Colors)? _paintedKeys;
+    private (double Top, double Height, bool Drums, PianoRollPalette Colors)? _paintedKeys;
     private PianoRollDocument? _document;
     private MeterMap _meterMap = new(TempoMap.DefaultTicksPerQuarter, []);
-    private Palette _palette = Palette.Dark;
+    private PianoRollPalette? _customPalette;
+    private PianoRollPalette _palette = PianoRollPalette.Dark;
     private int _ticksPerBeat = TempoMap.DefaultTicksPerQuarter;
     private int _cellsPerBeat = DefaultCellsPerBeat;
     private byte _defaultChannel;
@@ -222,9 +224,18 @@ public sealed partial class PianoRollView : UserControl
             EditorScroll.ChangeView(Math.Clamp(x - CellWidth, 0, EditorScroll.ScrollableWidth), null, null, true);
     }
 
+    internal void SetPalette(PianoRollPalette? palette)
+    {
+        if (ReferenceEquals(_customPalette, palette))
+            return;
+
+        _customPalette = palette;
+        ApplyPalette();
+    }
+
     private void ApplyPalette()
     {
-        _palette = ActualTheme == ElementTheme.Light ? Palette.Light : Palette.Dark;
+        _palette = _customPalette ?? (ActualTheme == ElementTheme.Light ? PianoRollPalette.Light : PianoRollPalette.Dark);
         Surface.Background = _palette.NaturalLane;
         Corner.Background = RulerInput.Background = _palette.Ruler;
         TempoHeader.Background = TempoInput.Background = _palette.Ruler;
@@ -562,30 +573,5 @@ public sealed partial class PianoRollView : UserControl
         Canvas.SetLeft(label, x);
         Canvas.SetTop(label, y);
         canvas.Children.Add(label);
-    }
-
-    private sealed record Palette(
-        Brush NaturalLane, Brush AccidentalLane, Brush MinorLine, Brush BeatLine, Brush MajorLine,
-        Brush Ruler, Brush RulerText, Brush RulerMuted,
-        Brush NaturalKey, Brush AccidentalKey, Brush NaturalKeyText, Brush AccidentalKeyText,
-        Brush Note, Brush NoteOutline, Brush SelectedNote, Brush SelectedOutline, Brush NoteText, Brush Handle,
-        Brush Playhead, Brush Loop)
-    {
-        public static Palette Dark { get; } = new(
-            Color(0x182432), Color(0x131D29), Color(0x273648), Color(0x374C63), Color(0x4A6078),
-            Color(0x222F3E), Color(0xE5EAF1), Color(0xA3B5C8),
-            Color(0xC5D2DF), Color(0x33465D), Color(0x172636), Color(0xE2EBF4),
-            Color(0x57BAA9), Color(0x64CDB8), Color(0x96E7D4), Color(0xE2FFF9),
-            Color(0x132D2A), Color(0x326952), Color(0xFFC16C), Color(0x76B9FF));
-
-        public static Palette Light { get; } = new(
-            Color(0xF8FAFD), Color(0xEEF3F9), Color(0xDEE7F0), Color(0xC7D6E4), Color(0xA6BBCC),
-            Color(0xE4EDF6), Color(0x22384D), Color(0x4B637B),
-            Color(0xF4F7FC), Color(0x3B526A), Color(0x1B3043), Color(0xF0F5FB),
-            Color(0x7BCCBA), Color(0x318574), Color(0x63C5AD), Color(0x134D43),
-            Color(0x112E29), Color(0x376F64), Color(0xA75314), Color(0x0C65B4));
-
-        private static SolidColorBrush Color(uint rgb) =>
-            new(global::Windows.UI.Color.FromArgb(255, (byte)(rgb >> 16), (byte)(rgb >> 8), (byte)rgb));
     }
 }

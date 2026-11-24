@@ -2,12 +2,25 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
 using Signal.Native.Engine;
+using Signal.Native.Uno.App.Controls;
 using Windows.System;
 
 namespace Signal.Native.Uno.App;
 
 public sealed partial class MainWindow
 {
+    private NumericScrub? _volumeScrub;
+    private NumericScrub? _panScrub;
+
+    private void InitializeChannelControlScrubs()
+    {
+        _volumeScrub = NumericScrub.Attach(ChannelVolumeEntry, ChannelVolumeBox,
+            () => new(0, 127, SongTrackEditor.DefaultControlValue(ChannelControl.Volume)),
+            commit: () => CommitOpeningControl(ChannelVolumeBox));
+        _panScrub = NumericScrub.Attach(ChannelPanEntry, ChannelPanBox, () => new(-64, 63),
+            commit: () => CommitOpeningControl(ChannelPanBox));
+    }
+
     private void RefreshChannelControls(EditableSongTrack track)
     {
         ChannelVolumeBox.Text = _trackEditor.GetOpeningControlValue(track.PrimaryChannel, ChannelControl.Volume).ToString();
@@ -16,15 +29,25 @@ public sealed partial class MainWindow
         RollView.SetChannelPoints(ChannelControl.Pan, _trackEditor.GetChannelControlPoints(track.PrimaryChannel, ChannelControl.Pan));
     }
 
-    private void ChannelControlLostFocus(object sender, RoutedEventArgs args) => CommitOpeningControl((TextBox)sender);
+    private void ChannelControlLostFocus(object sender, RoutedEventArgs args)
+    {
+        var field = (TextBox)sender;
+        if (!IsDraggingOpeningControl(field))
+            CommitOpeningControl(field);
+    }
 
     private void ChannelControlKeyDown(object sender, KeyRoutedEventArgs args)
     {
         if (args.Key != VirtualKey.Enter)
             return;
         args.Handled = true;
-        CommitOpeningControl((TextBox)sender);
+        var field = (TextBox)sender;
+        if (!IsDraggingOpeningControl(field))
+            CommitOpeningControl(field);
     }
+
+    private bool IsDraggingOpeningControl(TextBox field) =>
+        (ReferenceEquals(field, ChannelPanBox) ? _panScrub : _volumeScrub)?.IsDragging == true;
 
     private void CommitOpeningControl(TextBox field)
     {
@@ -86,6 +109,8 @@ public sealed partial class MainWindow
                 Header = control.ToString(), Minimum = -offset, Maximum = 127 - offset,
                 SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Compact
             };
+            var valueEntry = new Grid { Children = { value } };
+            NumericScrub.Attach(valueEntry, value, fallback: 0);
             var apply = new Button { Content = "Apply value" };
             var remove = new Button { Content = "Remove point" };
             var buttons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
@@ -93,7 +118,7 @@ public sealed partial class MainWindow
             buttons.Children.Add(remove);
             var panel = new StackPanel { Spacing = 8, MinWidth = 270 };
             panel.Children.Add(list);
-            panel.Children.Add(value);
+            panel.Children.Add(valueEntry);
             panel.Children.Add(buttons);
             ChannelControlPoint[] points = [];
             void Reload(long? selectedTick = null)
@@ -106,7 +131,7 @@ public sealed partial class MainWindow
                 }).ToArray();
                 int index = Array.FindIndex(points, point => point.Tick == selectedTick);
                 list.SelectedIndex = index >= 0 ? index : points.Length > 0 ? 0 : -1;
-                value.Visibility = buttons.Visibility = points.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+                valueEntry.Visibility = buttons.Visibility = points.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
                 if (points.Length == 0)
                     list.ItemsSource = new[] { "No points. Click the lane to add one." };
             }

@@ -30,6 +30,8 @@ public sealed class SongAudioRenderer
         var output = stereo[..(frames * 2)];
         output.Clear();
         _playback.Render(output, _frame, _tempo, null);
+        for (int i = 0; i < output.Length; i++)
+            output[i] = Math.Clamp(output[i], -1f, 1f);
         _frame += frames;
         return frames;
     }

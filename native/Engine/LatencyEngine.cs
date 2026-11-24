@@ -8,6 +8,8 @@ public readonly record struct RecordingDisplayPosition(long? Tick, int? CountInB
 public sealed class LatencyEngine
 {
     public const int MaxHeldRecordingSegments = HeldRecordingNotes.KeyCount * 2;
+    public const int MinimumOutputGainDb = -24;
+    public const int MaximumOutputGainDb = 18;
     private const int EventCapacity = 2048;
     private const int RecordingCommandReserve = 32;
     private readonly object _producerLock = new();
@@ -17,6 +19,8 @@ public sealed class LatencyEngine
     private readonly Recording _recording;
     private readonly NotePlayback _playback;
     private readonly NotePlayback _notePreview;
+    private readonly OutputCompressor _outputCompressor;
+    private readonly OutputLimiter _outputLimiter;
     private readonly MetronomeMixer _mixMetronome;
     private readonly MeterMap _defaultMeter;
     private readonly float[] _accent;
@@ -35,6 +39,8 @@ public sealed class LatencyEngine
     private long _midiResetTimestamp;
     private int _midiGeneration;
     private int _audioMidiGeneration;
+    private int _outputGainDb;
+    private volatile bool _compressorEnabled;
     private volatile bool _metronomeEnabled;
     private volatile bool _previewMetronomeEnabled;
 
@@ -55,6 +61,8 @@ public sealed class LatencyEngine
         _defaultMeter = new MeterMap(tempoMap.TicksPerQuarter, []);
         _playback = new NotePlayback(sampleRate, _defaultMeter);
         _notePreview = new NotePlayback(sampleRate, _defaultMeter);
+        _outputCompressor = new OutputCompressor(sampleRate);
+        _outputLimiter = new OutputLimiter(sampleRate);
         _mixMetronome = MixClicks;
         _accent = BuildClick(sampleRate, 1600, 0.25f);
         _beat = BuildClick(sampleRate, 1100, 0.16f);
@@ -62,6 +70,18 @@ public sealed class LatencyEngine
 
     public int SampleRate { get; }
     public TempoMap TempoMap { get; }
+
+    public int OutputGainDb
+    {
+        get => Volatile.Read(ref _outputGainDb);
+        set => Volatile.Write(ref _outputGainDb, Math.Clamp(value, MinimumOutputGainDb, MaximumOutputGainDb));
+    }
+
+    public bool CompressorEnabled
+    {
+        get => _compressorEnabled;
+        set => _compressorEnabled = value;
+    }
 
     public bool MetronomeEnabled
     {
@@ -442,6 +462,8 @@ public sealed class LatencyEngine
         if (mixedFrame < endFrame)
             MixTransport(interleavedStereo[(int)((mixedFrame - firstFrame) * 2)..], mixedFrame);
         _notePreview.Render(interleavedStereo, firstFrame, PreviewTempo, null);
+        _outputCompressor.Apply(interleavedStereo, CompressorEnabled);
+        _outputLimiter.Apply(interleavedStereo, OutputGainDb);
         if (_activeSongTake is { } take)
         {
             Volatile.Write(ref take.ElapsedFrames, endFrame - take.SongStartFrame);
@@ -731,8 +753,8 @@ public sealed class LatencyEngine
         {
             int sample = (int)((frame - firstFrame) * 2);
             float value = click[(int)(frame - onset)];
-            output[sample] = Math.Clamp(output[sample] + value, -1, 1);
-            output[sample + 1] = Math.Clamp(output[sample + 1] + value, -1, 1);
+            output[sample] += value;
+            output[sample + 1] += value;
         }
     }
 

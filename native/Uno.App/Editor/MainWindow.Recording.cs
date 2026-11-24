@@ -277,10 +277,18 @@ public sealed partial class MainWindow
     {
         if (_trackEditor is not null)
         {
-            SaveRecordingOffset(args.NewValue);
+            if (!_offsetScrub.IsDragging)
+                SaveRecordingOffset(args.NewValue);
             UpdatePlacementOffsetAction();
             UpdateCalibrationControls();
         }
+    }
+
+    private void CommitRecordingOffsetDrag()
+    {
+        SaveRecordingOffset(OffsetBox.Value);
+        UpdatePlacementOffsetAction();
+        UpdateCalibrationControls();
     }
 
     private void UpdatePlacementOffsetAction()

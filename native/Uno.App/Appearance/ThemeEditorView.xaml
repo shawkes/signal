@@ -1,0 +1,42 @@
+<UserControl
+    x:Class="Signal.Native.Uno.App.Appearance.ThemeEditorView"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <StackPanel Spacing="14">
+        <Grid ColumnSpacing="12">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="116" />
+            </Grid.ColumnDefinitions>
+            <TextBox x:Name="NameBox" Header="Theme name" />
+            <ComboBox x:Name="ModeBox" Grid.Column="1" Header="Appearance" HorizontalAlignment="Stretch">
+                <ComboBoxItem Content="Dark" />
+                <ComboBoxItem Content="Light" />
+            </ComboBox>
+        </Grid>
+        <Grid ColumnSpacing="18">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <ListView x:Name="ColorList" Header="Colors" Height="350" MinWidth="156"
+                      AutomationProperties.Name="Theme colors"
+                      ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                <ListView.ItemTemplate>
+                    <DataTemplate>
+                        <StackPanel Orientation="Horizontal" Spacing="10">
+                            <Border Width="16" Height="16" CornerRadius="3" Background="{Binding Brush}"
+                                    BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}" BorderThickness="1" />
+                            <TextBlock Text="{Binding Label}" />
+                        </StackPanel>
+                    </DataTemplate>
+                </ListView.ItemTemplate>
+            </ListView>
+            <ColorPicker x:Name="Picker" Grid.Column="1" Margin="0,24,0,0" VerticalAlignment="Top"
+                         IsAlphaEnabled="False" IsColorPreviewVisible="True" IsColorChannelTextInputVisible="False"
+                         IsHexInputVisible="True"
+                         AutomationProperties.Name="Selected theme color" />
+        </Grid>
+        <InfoBar x:Name="ErrorBar" Severity="Error" IsClosable="False" />
+    </StackPanel>
+</UserControl>

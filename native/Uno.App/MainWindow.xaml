@@ -60,6 +60,7 @@
                 <Button.Flyout>
                     <MenuFlyout Placement="BottomEdgeAlignedLeft">
                         <MenuFlyoutItem Text="Audio &amp; MIDI…" Click="AudioMidiSettingsClicked" />
+                        <MenuFlyoutSubItem x:Name="ThemeMenu" Text="Theme" />
                     </MenuFlyout>
                 </Button.Flyout>
             </Button>
@@ -245,15 +246,19 @@
                                     <Flyout x:Name="ChannelControlsFlyout" Placement="Right">
                                         <StackPanel Spacing="12">
                                             <StackPanel Orientation="Horizontal" Spacing="12">
-                                                <TextBox x:Name="ChannelVolumeBox" Header="Opening volume" Width="132"
-                                                         InputScope="Number" LostFocus="ChannelControlLostFocus" KeyDown="ChannelControlKeyDown" />
+                                                <Grid x:Name="ChannelVolumeEntry" Width="160">
+                                                    <TextBox x:Name="ChannelVolumeBox" Header="Opening volume"
+                                                             InputScope="Number" LostFocus="ChannelControlLostFocus" KeyDown="ChannelControlKeyDown" />
+                                                </Grid>
                                                 <Button Content="Show lane" VerticalAlignment="Bottom" Click="ShowVolumeLaneClicked"
                                                         AutomationProperties.Name="Show volume lane" />
                                             </StackPanel>
                                             <StackPanel Orientation="Horizontal" Spacing="12">
-                                                <TextBox x:Name="ChannelPanBox" Header="Opening pan" Width="132"
-                                                         InputScope="Number" LostFocus="ChannelControlLostFocus" KeyDown="ChannelControlKeyDown"
-                                                         ToolTipService.ToolTip="Negative is left, 0 is center, positive is right" />
+                                                <Grid x:Name="ChannelPanEntry" Width="160">
+                                                    <TextBox x:Name="ChannelPanBox" Header="Opening pan"
+                                                             InputScope="Number" LostFocus="ChannelControlLostFocus" KeyDown="ChannelControlKeyDown"
+                                                             ToolTipService.ToolTip="Negative is left, 0 is center, positive is right" />
+                                                </Grid>
                                                 <Button Content="Show lane" VerticalAlignment="Bottom" Click="ShowPanLaneClicked"
                                                         AutomationProperties.Name="Show pan lane" />
                                             </StackPanel>
@@ -305,6 +310,18 @@
                                 <Button x:Name="RefreshButton" Grid.Row="1" Grid.Column="1" Content="Refresh devices"
                                         VerticalAlignment="Bottom" Click="RefreshDevicesClicked" />
                             </Grid>
+                            <Grid ColumnSpacing="12">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="72" />
+                                </Grid.ColumnDefinitions>
+                                <Slider x:Name="OutputGainSlider" Header="Output gain" StepFrequency="1"
+                                        AutomationProperties.Name="Output gain in decibels" />
+                                <TextBlock x:Name="OutputGainValue" Grid.Column="1" HorizontalAlignment="Right"
+                                           VerticalAlignment="Bottom" Margin="0,0,0,5" />
+                            </Grid>
+                            <CheckBox x:Name="CompressorBox" Content="Compressor"
+                                      ToolTipService.ToolTip="Reduce the difference between loud and quiet sounds during playback." />
                             <TextBlock x:Name="AudioFormatText" Text="Starting audio…" TextWrapping="Wrap"
                                        Style="{StaticResource CaptionTextBlockStyle}" />
                             <Grid x:Name="DiagnosticsGrid" ColumnSpacing="8" RowSpacing="2">
@@ -397,11 +414,13 @@
                                 </Grid.ColumnDefinitions>
                                 <CheckBox x:Name="TestMetronomeBox" Content="Metronome during test · 120 BPM"
                                           IsChecked="True" IsEnabled="False" VerticalAlignment="Bottom" />
-                                <NumberBox x:Name="OffsetBox" Grid.Column="1" Header="Recording offset (ms)"
-                                           Value="10" Minimum="-500" Maximum="500" SmallChange="1"
-                                           ValueChanged="RecordingOffsetChanged"
-                                           SpinButtonPlacementMode="Inline"
-                                           ToolTipService.ToolTip="Positive values place recorded notes earlier." />
+                                <Grid x:Name="OffsetEntry" Grid.Column="1">
+                                    <NumberBox x:Name="OffsetBox" Header="Recording offset (ms)"
+                                               Value="10" Minimum="-500" Maximum="500" SmallChange="1"
+                                               ValueChanged="RecordingOffsetChanged"
+                                               SpinButtonPlacementMode="Inline"
+                                               ToolTipService.ToolTip="Positive values place recorded notes earlier." />
+                                </Grid>
                                 <ComboBox x:Name="QuantizeBox" Grid.Column="2" Header="Quantize"
                                           MinWidth="92" VerticalAlignment="Top" />
                             </Grid>

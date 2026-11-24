@@ -40,7 +40,11 @@ public sealed partial class MainWindow
     }
 
     private LoopRange? EnabledLoopRange(LoopRange? range, bool enabled, long endTick) =>
-        enabled ? range ?? new LoopRange(0, endTick > 0 ? endTick : _trackEditor.MeterMap.NextBarTick(0)) : null;
+        enabled ? range ?? LoopRange.WholeSong(endTick, _trackEditor.MeterMap) : null;
+
+    private long PlaybackSeekEndTick(long songEndTick) => _loopEnabled && _loopRange is null
+        ? LoopRange.WholeSong(songEndTick, _trackEditor.MeterMap).EndTick
+        : songEndTick;
 
     private void UpdateLoopDisplay()
     {

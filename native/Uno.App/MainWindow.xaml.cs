@@ -12,6 +12,7 @@ using Signal.Native.Application.Settings;
 using Signal.Native.Desktop.Devices;
 using Signal.Native.Engine;
 using Signal.Native.SoundFont;
+using Signal.Native.Uno.App.Controls;
 using Windows.Graphics;
 
 namespace Signal.Native.Uno.App;
@@ -29,7 +30,8 @@ public sealed partial class MainWindow : Window
     private LatencyEngine? _engine;
     private RtMidiInput? _midiInput;
     private readonly SongSession _songSession = new();
-    private readonly RecordingPreferences _preferences;
+    private readonly UserPreferences _preferences;
+    private readonly NumericScrub _offsetScrub;
     private string? _midiEnumerationError;
     private MidiInputPreference? _preferredMidiInput;
     private double? _savedRecordingOffset;
@@ -50,12 +52,16 @@ public sealed partial class MainWindow : Window
 
     public MainWindow(string? startupMidiPath = null)
     {
-        _preferences = RecordingPreferences.ForCurrentUser(ApplicationTitle);
+        _preferences = UserPreferences.ForCurrentUser(ApplicationTitle);
         InitializeComponent();
         // Retain the dialog and its settings controls when they're outside the editor's visual tree.
         _audioMidiSettingsDialog = AudioMidiSettingsDialog;
         WorkspaceRoot.Children.Remove(_audioMidiSettingsDialog);
+        InitializeThemeMenu();
+        InitializeOutputSettings();
         OffsetBox.NumberFormatter = new global::Windows.Globalization.NumberFormatting.DecimalFormatter { FractionDigits = 1 };
+        _offsetScrub = NumericScrub.Attach(OffsetEntry, OffsetBox, fallback: 10, commit: CommitRecordingOffsetDrag);
+        InitializeChannelControlScrubs();
         _savedRecordingOffset = _preferences.ReadOffset();
         if (_savedRecordingOffset is { } offset)
             OffsetBox.Value = offset;
@@ -222,7 +228,9 @@ public sealed partial class MainWindow : Window
                 renderer!.Render(samples, firstFrame, new AudioClockAnchor(timestamp, firstFrame), Stopwatch.GetTimestamp()), preference);
             renderer = new LatencyEngine(candidate.SampleRate, SilentMonitorSynth.Instance)
             {
-                MetronomeEnabled = SongMetronomeButton.IsChecked == true
+                MetronomeEnabled = SongMetronomeButton.IsChecked == true,
+                OutputGainDb = (int)OutputGainSlider.Value,
+                CompressorEnabled = CompressorBox.IsChecked == true
             };
             ConfigureLiveMidi(renderer);
             candidate.Start();
@@ -448,7 +456,8 @@ public sealed partial class MainWindow : Window
             long endTick = reuse ? _playingSongEndTick : _songEndTick;
             var song = reuse ? _playingSong! : _trackEditor.SnapshotBackingSong(endTick);
             var loop = EnabledLoopRange(_loopRange, _loopEnabled, endTick);
-            long start = seek ? Math.Min(tick, Math.Max(0, endTick - 1)) : tick < endTick ? tick : 0;
+            long seekEnd = PlaybackSeekEndTick(endTick);
+            long start = seek ? Math.Min(tick, Math.Max(0, seekEnd - 1)) : tick < seekEnd ? tick : 0;
             if (!engine.PlaySong(song, new SoundFontPiano(_bank!, engine.SampleRate, generalMidi: true), loop, start,
                 allowSilent: true))
                 return;
@@ -467,7 +476,7 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private void RefreshPlaybackNotes()
+    private void RefreshPlayback()
     {
         if (CaptureInProgress || _audioFailed || _engine is not { PlaybackTick: not null } engine ||
             _playingSong is not { } current)
@@ -505,7 +514,7 @@ public sealed partial class MainWindow : Window
             return;
 
         var playingEngine = _engine is { PlaybackTick: not null } engine && _bank is not null ? engine : null;
-        _cueTick = Math.Clamp(tick, 0, playingEngine is null ? _songEndTick : _playingSongEndTick);
+        _cueTick = Math.Clamp(tick, 0, PlaybackSeekEndTick(playingEngine is null ? _songEndTick : _playingSongEndTick));
         if (playingEngine is not null)
             StartSongPlayback(playingEngine, _cueTick, seek: true);
         else
@@ -785,6 +794,7 @@ public sealed partial class MainWindow : Window
     private void OnClosed(object sender, WindowEventArgs args)
     {
         _closed = true;
+        SaveOutputPreferences();
         _uiTimer.Stop();
         WatchTransportFrames(false);
         _midiMonitor?.Close();

@@ -16,6 +16,7 @@ public sealed partial class MainWindow
         {
             var buffer = new MidiMonitorBuffer();
             _midiMonitor = new MidiMonitorWindow(buffer);
+            ApplyMidiMonitorTheme();
             _midiMonitor.Closed += (_, _) =>
             {
                 Volatile.Write(ref _midiMonitorBuffer, null);

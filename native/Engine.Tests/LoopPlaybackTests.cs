@@ -10,6 +10,37 @@ public sealed class LoopPlaybackTests
     private const int PassFrames = 120_000;
     private static readonly LoopRange TempoChangeLoop = new(1_440, 2_880);
 
+    [Theory]
+    [InlineData(0, 1_920)]
+    [InlineData(1_200, 1_920)]
+    [InlineData(1_920, 1_920)]
+    [InlineData(2_050, 2_200)]
+    [InlineData(2_200, 2_200)]
+    [InlineData(2_300, 3_640)]
+    public void WholeSongLoopEndsAtTheLastMeasureBoundary(long endTick, long expectedEnd)
+    {
+        var meter = new MeterMap(480, [new(2_200, new(3, 4))]);
+
+        Assert.Equal(new LoopRange(0, expectedEnd), LoopRange.WholeSong(endTick, meter));
+    }
+
+    [Fact]
+    public void WholeSongLoopPlaysTheRestOfTheLastBarBeforeRepeating()
+    {
+        var engine = Create();
+        var synth = new EventSynth();
+        var song = new Song(engine.TempoMap,
+            [new SongTrack("Piano", [new(0, 480, 0, 60, 95)], endTick: 480)]);
+        var loop = LoopRange.WholeSong(480, song.MeterMap);
+        Assert.True(engine.PlaySong(song, synth, loop));
+
+        Render(engine, Origin, 96_001);
+
+        Assert.Equal([0, 96_000], synth.Resets);
+        Assert.Contains(new ReceivedMessage(24_000, 0x80, 60, 0), synth.Messages);
+        Assert.Contains(new ReceivedMessage(96_000, 0x90, 60, 95), synth.Messages);
+    }
+
     [Fact]
     public void RepeatsTempoMappedClickOnsetsAcrossArbitraryAudioBuffers()
     {
@@ -115,6 +146,51 @@ public sealed class LoopPlaybackTests
         Assert.Contains(new ReceivedMessage(200, 0x80, 60, 0), synth.Messages);
         Assert.Contains(new ReceivedMessage(300, 0x90, 64, 80), synth.Messages);
         Assert.Equal(6, engine.PlaybackTick);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void InstrumentEditsAndUndoReachThePlayingSynthBeforeTheNextNote(bool looping)
+    {
+        var engine = Create();
+        var synth = new EventSynth();
+        var editor = new SongTrackEditor(new Song(engine.TempoMap,
+        [
+            new SongTrack("Keys", [new(0, 10, 0, 60, 95), new(3, 2, 0, 64, 95)]),
+            new SongTrack("Setup", [], [new(0, 0xc0, 1, 0)]),
+            new SongTrack("Other", [new(4, 1, 1, 67, 95)], [new(0, 0xc1, 40, 0)])
+        ]));
+        var setup = editor.Tracks[1];
+        setup.IsMuted = true;
+        LoopRange? loop = looping ? new LoopRange(0, 12) : null;
+        Assert.True(engine.PlaySong(editor.SnapshotBackingSong(12), synth, loop));
+        editor.TrackSoundEdited += () => Assert.True(engine.UpdateSongPlayback(editor.SnapshotBackingSong(12), loop));
+
+        Render(engine, Origin, 75);
+        Assert.True(editor.SetTrackSound(setup, new TrackSound(2, 7)));
+        Assert.True(editor.SetTrackSound(setup, new TrackSound(4, 9)));
+        Render(engine, Origin + 75, 100);
+
+        Assert.Equal(looping ? [0] : Array.Empty<int>(), synth.Resets);
+        Assert.Equal(new[]
+        {
+            new ReceivedMessage(75, 0xb0, 0, 4), new ReceivedMessage(75, 0xb0, 32, 0), new ReceivedMessage(75, 0xc0, 9, 0)
+        }, synth.Messages.Where(message => message.Frame == 75));
+        Assert.Contains(new ReceivedMessage(150, 0x90, 64, 95), synth.Messages);
+        Assert.Equal(3, engine.PlaybackTick);
+        Assert.Single(synth.Messages, message => message.Status == 0x90 && message.Key == 60);
+        Assert.Single(synth.Messages, message => message.Status == 0xc1);
+
+        Assert.True(editor.UndoTrackEdit());
+        Render(engine, Origin + 175, 426);
+        Assert.Contains(new ReceivedMessage(175, 0xc0, 7, 0), synth.Messages);
+        Assert.Contains(new ReceivedMessage(500, 0x80, 60, 0), synth.Messages);
+        if (looping)
+        {
+            Assert.Equal([0, 600], synth.Resets);
+            Assert.Contains(new ReceivedMessage(600, 0xc0, 7, 0), synth.Messages);
+        }
     }
 
     [Fact]

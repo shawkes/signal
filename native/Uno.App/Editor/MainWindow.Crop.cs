@@ -1,5 +1,6 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Signal.Native.Uno.App.Controls;
 
 namespace Signal.Native.Uno.App;
 
@@ -24,8 +25,8 @@ public sealed partial class MainWindow
                 Text = $"Enter a range within measures 1–{lastMeasure}. The first kept measure becomes measure 1.",
                 TextWrapping = TextWrapping.Wrap
             });
-            content.Children.Add(first);
-            content.Children.Add(last);
+            content.Children.Add(NumericScrub.Wrap(first, () => new(1, lastMeasure, 1)));
+            content.Children.Add(NumericScrub.Wrap(last, () => new(1, lastMeasure, lastMeasure)));
             var dialog = new ContentDialog
             {
                 XamlRoot = WorkspaceRoot.XamlRoot,

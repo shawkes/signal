@@ -2,6 +2,7 @@ using System.Globalization;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
+using Signal.Native.Uno.App.Controls;
 using Windows.Foundation;
 using Windows.System;
 
@@ -43,7 +44,7 @@ public sealed partial class PianoRollView
         actions.Children.Add(apply);
         actions.Children.Add(cancel);
         var panel = new StackPanel { MinWidth = 185, MaxWidth = 330, Spacing = 8 };
-        panel.Children.Add(input);
+        panel.Children.Add(NumericScrub.Wrap(input, () => new(3.577m, 60_000_000, 120), fractional: true));
         panel.Children.Add(error);
         panel.Children.Add(actions);
 

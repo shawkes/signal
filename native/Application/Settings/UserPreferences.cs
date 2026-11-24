@@ -1,16 +1,21 @@
 using System.Text.Json;
+using Signal.Native.Application.Appearance;
+using Signal.Native.Engine;
 
 namespace Signal.Native.Application.Settings;
 
 public sealed record MidiInputPreference(string Name, string? InterfacePath);
 
-public sealed class RecordingPreferences(string directory)
+public sealed class UserPreferences(string directory)
 {
     private const string OffsetFile = "recording-offset.json";
     private const string MidiInputFile = "midi-input.json";
     private const string QuantizationFile = "recording-quantization.json";
+    private const string ThemeFile = "theme.json";
+    private const string OutputGainFile = "output-gain.json";
+    private const string CompressorFile = "compressor.json";
 
-    public static RecordingPreferences ForCurrentUser(string profile) => new(Path.Combine(
+    public static UserPreferences ForCurrentUser(string profile) => new(Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), profile));
 
     public double? ReadOffset()
@@ -23,10 +28,50 @@ public sealed class RecordingPreferences(string directory)
         Read<MidiInputPreference>(MidiInputFile) is { Name.Length: > 0 } device ? device : null;
 
     public int? ReadQuantizationDivision() => Read<int?>(QuantizationFile);
+    public string? ReadTheme() => Read<string>(ThemeFile);
+
+    public IReadOnlyList<ThemeDefinition> ReadCustomThemes()
+    {
+        try
+        {
+            var themes = new List<ThemeDefinition>();
+            foreach (var path in Directory.EnumerateFiles(directory, "theme-custom-*.json"))
+            {
+                string file = Path.GetFileName(path);
+                if (Read<ThemeDefinition>(file) is { } theme && theme.IsValid() && file == CustomThemeFile(theme.Id))
+                    themes.Add(theme);
+            }
+            return themes.OrderBy(theme => theme.Name, StringComparer.CurrentCultureIgnoreCase).ToArray();
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            return [];
+        }
+    }
+
+    public void SaveCustomTheme(ThemeDefinition theme)
+    {
+        if (!theme.IsValid())
+            throw new ArgumentException("The custom theme needs a name and a complete RGB palette.", nameof(theme));
+        Write(CustomThemeFile(theme.Id), theme);
+    }
+
+    private static string CustomThemeFile(Guid id) => $"theme-custom-{id:D}.json";
+
+    public int? ReadOutputGain()
+    {
+        var value = Read<int?>(OutputGainFile);
+        return value is >= LatencyEngine.MinimumOutputGainDb and <= LatencyEngine.MaximumOutputGainDb ? value : null;
+    }
+
+    public bool ReadCompressorEnabled() => Read<bool>(CompressorFile);
 
     public void SaveOffset(double value) => Write(OffsetFile, value);
     public void SaveMidiInput(MidiInputPreference? value) => Write(MidiInputFile, value);
     public void SaveQuantizationDivision(int value) => Write(QuantizationFile, value);
+    public void SaveTheme(string value) => Write(ThemeFile, value);
+    public void SaveOutputGain(int value) => Write(OutputGainFile, value);
+    public void SaveCompressorEnabled(bool value) => Write(CompressorFile, value);
 
     private T? Read<T>(string name)
     {

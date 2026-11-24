@@ -126,10 +126,13 @@ public class LatencyEngineTests
         Assert.False(engine.TryReadNote(out _));
     }
 
-    [Fact]
-    public void AllocatesNoManagedMemoryDuringWarmRendering()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void AllocatesNoManagedMemoryDuringWarmRendering(bool compressorEnabled)
     {
         var engine = NewEngine(new GateSynth());
+        engine.CompressorEnabled = compressorEnabled;
         engine.PreviewMetronomeEnabled = true;
         engine.SetRecording(true, 10, timestamp: Timestamp(0));
         var output = new float[256];
@@ -158,6 +161,62 @@ public class LatencyEngineTests
         Assert.Equal(0, allocatedBytes);
     }
 
+    [Fact]
+    public void OutputGainChangesDuringPlaybackWithoutAnAbruptStep()
+    {
+        var engine = NewEngine(new StereoSynth(0.1f, -0.05f));
+        Assert.Equal(0.1f, Render(engine, firstFrame: 0, frames: 1)[0]);
+
+        engine.OutputGainDb = 6;
+        var louder = Render(engine, firstFrame: 1, frames: 2_400);
+
+        Assert.InRange(louder[0], 0.1f, 0.101f);
+        Assert.InRange(louder[^2], 0.199f, 0.200f);
+        Assert.Equal(-0.5f * louder[^2], louder[^1]);
+    }
+
+    [Fact]
+    public void LimitsTheMixedSignalWithoutChangingStereoBalance()
+    {
+        var engine = NewEngine(new StereoSynth(0.75f, -0.375f));
+        var song = new Song(engine.TempoMap, [new SongTrack("Test", [new(0, 480, 0, 60, 127)])]);
+        Assert.True(engine.PlaySong(song, new StereoSynth(0.75f, -0.375f)));
+
+        var mixed = Render(engine, firstFrame: 0, frames: 2);
+
+        Assert.Equal(0.79433f, mixed[0], precision: 5);
+        Assert.Equal(-0.5f * mixed[0], mixed[1]);
+    }
+
+    [Fact]
+    public void CompressorToggleCrossfadesAndReturnsToBypass()
+    {
+        var engine = NewEngine(new StereoSynth(0.05f, -0.025f));
+        Assert.Equal(0.05f, Render(engine, firstFrame: 0, frames: 1)[0]);
+
+        engine.CompressorEnabled = true;
+        var enabled = Render(engine, firstFrame: 1, frames: 1_024);
+        Assert.InRange(enabled[0], 0.05f, 0.0502f);
+        Assert.InRange(enabled[^2], 0.099f, 0.100f);
+
+        engine.CompressorEnabled = false;
+        var bypassed = Render(engine, firstFrame: 1_025, frames: 1_024);
+        Assert.InRange(bypassed[0], enabled[^2] - 0.0002f, enabled[^2]);
+        Assert.Equal(0.05f, bypassed[^2]);
+    }
+
+    [Fact]
+    public void CompressorReducesLoudSustainedSignalWithoutChangingStereoBalance()
+    {
+        var engine = NewEngine(new StereoSynth(0.5f, -0.25f));
+        engine.CompressorEnabled = true;
+
+        var compressed = Render(engine, firstFrame: 0, frames: 2_400);
+
+        Assert.InRange(compressed[^2], 0.395f, 0.4f);
+        Assert.Equal(-0.5f * compressed[^2], compressed[^1]);
+    }
+
     private static LatencyEngine NewEngine(IMonitorSynth synth) => new(SampleRate, synth, timestampFrequency: SampleRate);
 
     private static long Timestamp(long frame) => ClockOrigin + frame;
@@ -177,5 +236,19 @@ public class LatencyEngineTests
         public void ProcessMidi(byte status, byte data1, byte data2) => _gate = status == 0x90 && data2 != 0;
 
         public void Render(Span<float> interleavedStereo) => interleavedStereo.Fill(_gate ? 0.1f : 0);
+    }
+
+    private sealed class StereoSynth(float left, float right) : IMonitorSynth
+    {
+        public void ProcessMidi(byte status, byte data1, byte data2) { }
+
+        public void Render(Span<float> stereo)
+        {
+            for (int i = 0; i < stereo.Length; i += 2)
+            {
+                stereo[i] = left;
+                stereo[i + 1] = right;
+            }
+        }
     }
 }

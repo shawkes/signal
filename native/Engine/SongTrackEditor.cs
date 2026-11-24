@@ -42,7 +42,7 @@ public sealed class SongTrackEditor
     private const int MidiChannelCount = 16;
 
     private readonly List<EditableSongTrack> _tracks = [];
-    private readonly Stack<(Action Revert, long Revision)> _undo = new();
+    private readonly Stack<(Action Revert, long Revision, bool ChangesSound)> _undo = new();
     private readonly Stack<(TempoMap Map, long Revision)> _tempoUndo = new();
     private readonly Stack<MeterMap> _meterUndo = new();
     private MeterMap _savedMeterMap;
@@ -89,6 +89,7 @@ public sealed class SongTrackEditor
 
     public event Action? Changed;
     public event Action? NotesEdited;
+    public event Action? TrackSoundEdited;
     public event Action? TracksChanged;
 
     public Song SnapshotSong() => new(TempoMap, _tracks.Select(track =>
@@ -142,8 +143,9 @@ public sealed class SongTrackEditor
         return new Song(TempoMap, _tracks.Select(track => IsAudible(track)
             ? new SongTrack(track.Name, track.Document.CreatePlaybackSnapshot(), track.PlaybackMessages, endTick)
             : new SongTrack(track.Name, [], track.PlaybackMessages.Where(message =>
-                (message.Status & 0xf0) == 0xb0 && message.Data1 is 7 or 10 or 39 or 42 &&
-                audibleChannels.Contains((byte)(message.Status & 0x0f))), endTick)), meterMap: MeterMap);
+                audibleChannels.Contains((byte)(message.Status & 0x0f)) &&
+                (IsStartingSoundMessage(message) || ((message.Status & 0xf0) == 0xb0 && message.Data1 is 7 or 10 or 39 or 42))),
+                endTick)), meterMap: MeterMap);
     }
 
     public static byte DefaultControlValue(ChannelControl control) => control == ChannelControl.Volume ? (byte)100 : (byte)64;
@@ -380,7 +382,7 @@ public sealed class SongTrackEditor
         {
             foreach (var (changed, messages) in previous)
                 changed.PlaybackMessages = messages;
-        });
+        }, changesSound: true);
         return true;
     }
 
@@ -391,7 +393,7 @@ public sealed class SongTrackEditor
 
         edit.Revert();
         _revision = edit.Revision;
-        NotifyTrackEdit();
+        NotifyTrackEdit(edit.ChangesSound);
         return true;
     }
 
@@ -463,8 +465,10 @@ public sealed class SongTrackEditor
         || track.PlaybackMessages.Any(message => (message.Status & 0x0f) == channel);
 
     private static bool IsStartingSoundMessage(SongChannelMessage message, byte channel) =>
-        message.Tick == 0 && (message.Status & 0x0f) == channel
-        && ((message.Status & 0xf0) == 0xc0 || ((message.Status & 0xf0) == 0xb0 && message.Data1 is 0 or 32));
+        (message.Status & 0x0f) == channel && IsStartingSoundMessage(message);
+
+    private static bool IsStartingSoundMessage(SongChannelMessage message) =>
+        message.Tick == 0 && ((message.Status & 0xf0) == 0xc0 || ((message.Status & 0xf0) == 0xb0 && message.Data1 is 0 or 32));
 
     private static SongChannelMessage[] CreateStartingMessages(byte channel, TrackSound sound) =>
     [
@@ -485,17 +489,19 @@ public sealed class SongTrackEditor
         _tracks.RemoveAt(index);
     }
 
-    private void Commit(Action revert)
+    private void Commit(Action revert, bool changesSound = false)
     {
-        _undo.Push((revert, _revision));
+        _undo.Push((revert, _revision, changesSound));
         _revision = ++_nextRevision;
-        NotifyTrackEdit();
+        NotifyTrackEdit(changesSound);
     }
 
-    private void NotifyTrackEdit()
+    private void NotifyTrackEdit(bool changesSound)
     {
         TracksChanged?.Invoke();
         Changed?.Invoke();
+        if (changesSound)
+            TrackSoundEdited?.Invoke();
     }
 
     private void NotesChanged()

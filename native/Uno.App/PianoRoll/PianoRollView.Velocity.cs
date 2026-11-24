@@ -1,6 +1,7 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Signal.Native.Engine;
+using Signal.Native.Uno.App.Controls;
 using Windows.System;
 
 namespace Signal.Native.Uno.App.PianoRoll;
@@ -30,7 +31,8 @@ public sealed partial class PianoRollView
         if (notes.Length > 0 && _editingEnabled)
         {
             panel.Children.Add(mode);
-            panel.Children.Add(value);
+            panel.Children.Add(NumericScrub.Wrap(value,
+                () => mode.SelectedIndex == 1 ? new(-126, 126) : new(1, 127, first)));
             panel.Children.Add(apply);
         }
         panel.Children.Add(lane);

@@ -21,13 +21,15 @@ public sealed partial class MainWindow
         if (_trackEditor is not null)
         {
             _trackEditor.Changed -= SongEdited;
-            _trackEditor.NotesEdited -= RefreshPlaybackNotes;
+            _trackEditor.NotesEdited -= RefreshPlayback;
+            _trackEditor.TrackSoundEdited -= RefreshPlayback;
             _trackEditor.TracksChanged -= TrackPanelChanged;
         }
         var editor = _songSession.Editor;
         _trackEditor = editor;
         editor.Changed += SongEdited;
-        editor.NotesEdited += RefreshPlaybackNotes;
+        editor.NotesEdited += RefreshPlayback;
+        editor.TrackSoundEdited += RefreshPlayback;
         editor.TracksChanged += TrackPanelChanged;
         _captureTrack = null;
         _firstImportedNote = null;
