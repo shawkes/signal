@@ -95,15 +95,18 @@ public sealed partial class MainWindow : Window
     private async void OnLoaded(object sender, RoutedEventArgs args)
     {
         WorkspaceRoot.Loaded -= OnLoaded;
-        DispatcherQueue.TryEnqueue(DispatcherQueuePriority.Low, () =>
-        {
-            if (RollView.IsLoaded && !AudioMidiSettingsOpen)
-                RollView.Focus(FocusState.Programmatic);
-        });
         RefreshDevices();
         OpenAudio();
         OpenMidi();
         _uiTimer.Start();
+        if (!DispatcherQueue.TryEnqueue(DispatcherQueuePriority.Low, () =>
+        {
+            WindowsStartupSplash.Close();
+            if (RollView.IsLoaded && !AudioMidiSettingsOpen)
+                RollView.Focus(FocusState.Programmatic);
+        }))
+            WindowsStartupSplash.Close();
+
         if (_startupMidiPath is { } path)
         {
             SetFileBusy(true);
